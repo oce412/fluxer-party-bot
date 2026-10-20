@@ -1,0 +1,25 @@
+{
+  "name": "fluxer-party-events-bot",
+  "version": "0.8.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env bot.js",
+    "dev": "node --watch --env-file=.env bot.js",
+    "check": "node --check bot.js && node --check src/store.js && node --check src/i18n.js && node --check src/lifecycle.js && node --check src/notices.js && node --check src/logger.js && node --check src/health.js && node --check src/gateway-health.js && node --check src/authz.js && node --check src/db-migrations.js && node --check scripts/run-migrations.js && node --check scripts/db-backup.js && node --check scripts/invite-url.js && node --check test/lifecycle.test.js && node --check test/notices.test.js && node --check test/authz.test.js && node --check test/health.test.js && node --check test/gateway-health.test.js && node --check test/db-migrations.test.js && node --check test/logger.test.js && npm run check:lang",
+    "check:lang": "node scripts/check-lang.js",
+    "lang:add": "node scripts/new-lang.js",
+    "test": "node --test",
+    "start:dev": "node --env-file-if-exists=.env.development bot.js",
+    "start:prod": "node --env-file-if-exists=.env.production bot.js",
+    "db:migrate": "node --env-file-if-exists=.env.production scripts/run-migrations.js",
+    "db:backup": "node --env-file-if-exists=.env.production scripts/db-backup.js",
+    "invite": "node --env-file-if-exists=.env.production scripts/invite-url.js",
+    "invite:dev": "node --env-file-if-exists=.env.development scripts/invite-url.js"
+  },
+  "dependencies": {
+    "@fluxerjs/core": "3.3.0",
+    "luxon": "3.7.2",
+    "pg": "8.16.3"
+  }
+}

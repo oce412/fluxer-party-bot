@@ -1,0 +1,34 @@
+# Visual Studio and IDE cache
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Dependencies
+node_modules/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+!.env.development.example
+!.env.production.example
+!.env.container.example
+
+# Local data and backups
+data/
+data-*/
+backups/
+logs/
+*.log
+*.dump
+*.backup
+*.bak
+
+# Test output
+coverage/
+
+# Operating system files
+Thumbs.db
+.DS_Store

@@ -1,0 +1,28 @@
+# Never send secrets or host-specific environment files to the Docker build context.
+.env
+.env.*
+*.env
+
+# Host-installed dependencies and local development state.
+node_modules
+npm-debug.log*
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# Runtime data and database backups must not be baked into the image.
+data
+data-development
+data-production
+backups
+*.dump
+*.backup
+
+# Test/dev documentation is not needed at runtime.
+test
+coverage
+README.md
+CHANGELOG.md
+docs
