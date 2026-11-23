@@ -30,7 +30,7 @@ for (const key of [...usedKeys].sort()) {
   }
 }
 // These keys are referenced indirectly through data-driven property names or `translateText(language, key)`.
-const indirectKeys = new Set(['reminder24', 'reminder1', 'reminder5', 'languageName']);
+const indirectKeys = new Set(['reminder24', 'reminder1', 'reminder5', 'languageName', 'scheduledTag']);
 for (const key of [...base.keys()].sort()) {
   if (!usedKeys.has(key) && !indirectKeys.has(key)) errors.push(`Unused translation key (remove it or use it): ${key}`);
 }
