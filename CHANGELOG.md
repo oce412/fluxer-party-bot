@@ -25,3 +25,6 @@
 - Add server selection, list, info, RSVP, cancel and host management from DMs.
 - Include community and announcement-channel pointers in event detail responses.
 - Re-check the user's membership in the selected community before every DM action; DM event management remains host-only.
+- Scope DM community selection to a 10-minute sliding idle window; pin the selection only while the creation wizard is active.
+- Harden membership lookups against different client collection shapes and re-check membership before dispatch.
+- Make event listing tolerate incomplete event/attendee payloads and split long DM responses into safe message sizes.
