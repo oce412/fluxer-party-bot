@@ -292,7 +292,9 @@ client.on(Events.MessageCreate, async (message) => {
       } else if (command === 'server') {
         await selectDmGuild(message, null, null, tail);
       } else if (command === 'manage') {
-        await dispatchDmEventCommand(message, command, tail, null);
+        const selectedGuildId = dmGuildSelections.get(message.author.id);
+        if (selectedGuildId) await dispatchDmEventCommand(message, command, tail, selectedGuildId);
+        else await startEventManagement(message, tail);
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && hostManageSessions.has(message.author.id)) {
         hostManageSessions.delete(message.author.id);
         await message.author.send(t('hostManageClosed', {}, null));
@@ -457,8 +459,8 @@ async function isUserMemberInGuild(guildId, userId) {
   if (!member && typeof guild.fetchMember === 'function') {
     member = await guild.fetchMember(userId).catch(() => null);
   }
-  if (!member && guild.members?.resolve) {
-    member = await guild.members.resolve(userId).catch?.(() => null) ?? guild.members.resolve(userId);
+  if (!member && typeof guild.members?.resolve === 'function') {
+    member = guild.members.resolve(userId) ?? null;
   }
   return Boolean(member);
 }
@@ -488,6 +490,15 @@ async function selectDmGuild(message, pendingCommand = null, pendingArguments = 
   }
 
   const input = String(requestedInput ?? '').trim();
+  if (!input && pendingCommand) {
+    const currentId = dmGuildSelections.get(userId);
+    const current = accessible.find((guild) => guild.id === currentId);
+    if (current) {
+      dmGuildSelectionSessions.delete(userId);
+      await dispatchDmEventCommand(message, pendingCommand, pendingArguments, current.id);
+      return;
+    }
+  }
   if (input) {
     const resolved = resolveGuildSelection(input, accessible);
     if (!resolved.ok) {
