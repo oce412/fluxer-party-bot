@@ -30,3 +30,9 @@ test('rejects missing, partial and out-of-range selections', () => {
   assert.deepEqual(resolveGuildSelection('4', guilds), { ok: false, reason: 'invalid' });
   assert.deepEqual(resolveGuildSelection('1', []), { ok: false, reason: 'invalid' });
 });
+
+
+test('trims surrounding whitespace before resolving a community name or ID', () => {
+  assert.deepEqual(resolveGuildSelection('  Music Club  ', guilds), { ok: true, guild: guilds[1] });
+  assert.deepEqual(resolveGuildSelection('  100  ', guilds), { ok: true, guild: guilds[0] });
+});

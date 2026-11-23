@@ -23,4 +23,5 @@
 - Add per-user community selection for event commands in DMs, with membership checks before each operation.
 - Support DM event creation using the existing command format, plus list, info, RSVP, cancel and host management.
 - Include community and announcement-channel pointers in event detail responses.
+- Re-check the user's membership in the selected community before every DM action; DM event management remains host-only.
 - Keep DM management host-only and scope event lookup to the selected community.
