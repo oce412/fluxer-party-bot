@@ -2145,7 +2145,22 @@ async function publishEventPost(event) {
   try {
     const channel = await client.channels.fetch(event.channelId);
     if (!channel?.isGuild?.() || !channel?.isTextBased?.()) return false;
-    const post = await channel.send({ content: renderEventCard(event), allowedMentions: { parse: [] } });
+
+    let post;
+    try {
+      post = await channel.send({
+        embeds: [renderEventCard(event)],
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      if (!isEmbedPermissionError(error)) throw error;
+      logConsoleStyle('warn', `Embed permission is missing for channel ${event.channelId}; publishing a text fallback for event ${event.id}.`);
+      post = await channel.send({
+        content: renderEventCardText(event),
+        allowedMentions: { parse: [] },
+      });
+    }
+
     event.messageId = post.id;
     event.publishedAt = DateTime.utc().toISO({ suppressMilliseconds: true });
     await saveEvents([event]);
@@ -2172,20 +2187,72 @@ async function refreshEventPost(event) {
     const channel = await client.channels.fetch(event.channelId);
     if (!channel?.isTextBased?.()) return;
     const post = await channel.messages.fetch(event.messageId);
-    await post.edit({ content: renderEventCard(event), allowedMentions: { parse: [] } });
+    try {
+      await post.edit({
+        content: null,
+        embeds: [renderEventCard(event)],
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      if (!isEmbedPermissionError(error)) throw error;
+      logConsoleStyle('warn', `Embed permission is missing for channel ${event.channelId}; retaining a text card for event ${event.id}.`);
+      await post.edit({
+        content: renderEventCardText(event),
+        embeds: [],
+        allowedMentions: { parse: [] },
+      });
+    }
   } catch (error) {
     logConsoleStyle('warn', `Could not refresh the post for event ${event.id}:`, error?.message ?? error);
   }
 }
 
+function isEmbedPermissionError(error) {
+  const candidates = [error, error?.cause].filter(Boolean);
+  return candidates.some((candidate) => {
+    const code = String(candidate.code ?? '').toUpperCase();
+    return ['MISSING_PERMISSIONS', 'MISSING_PERMISSION', 'MISSING_ACCESS'].includes(code)
+      || candidate.statusCode === 403
+      || candidate.status === 403
+      || /embed.{0,30}permission|permission.{0,30}embed/i.test(String(candidate.message ?? ''));
+  });
+}
+
 function renderEventCard(event) {
   const guildId = event.guildId;
-  const yesCount = event.attendees.filter((attendee) => attendee.status === 'yes').length;
-  const maybeCount = event.attendees.filter((attendee) => attendee.status === 'maybe').length;
+  const statusKey = {
+    scheduled: 'scheduledTag',
+    cancelled: 'cancelledTag',
+    in_progress: 'inProgressTag',
+    completed: 'completedTag',
+    skipped: 'skippedTag',
+  }[event.status];
+  const hint = event.status === 'scheduled' && !isEventStarted(event)
+    ? t('cardRsvpHint', {}, guildId)
+    : event.status === 'in_progress'
+      ? t('eventStarted', {}, guildId)
+      : (statusKey ? t(statusKey, {}, guildId) : String(event.status ?? ''));
+  return buildEventAnnouncementEmbed(event, {
+    when: formatAnnouncementTime(event),
+    duration: `~${formatDuration(event.durationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES, guildId)}`,
+    noLimitLabel: t('cardNoLimit', {}, guildId),
+    maybeLabel: t('embedMaybe', {}, guildId),
+    whenLabel: t('embedWhen', {}, guildId),
+    attendeesLabel: t('embedAttendees', {}, guildId),
+    durationLabel: t('embedDuration', {}, guildId),
+    statusLabel: statusKey ? t(statusKey, {}, guildId) : '',
+    footer: t('embedAnnouncementFooter', { id: event.id, hint }, guildId),
+  });
+}
+
+function renderEventCardText(event) {
+  const guildId = event.guildId;
+  const attendees = getEventAttendees(event);
+  const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
+  const maybeCount = attendees.filter((attendee) => attendee.status === 'maybe').length;
   const capacity = event.maxAttendees === null
     ? `${yesCount} · ${t('cardNoLimit', {}, guildId)}`
     : `${yesCount}/${event.maxAttendees}`;
-
   const status = event.status === 'cancelled'
     ? ` · ⛔ ${t('cancelledTag', {}, guildId)}`
     : event.status === 'in_progress'
@@ -2195,25 +2262,21 @@ function renderEventCard(event) {
         : event.status === 'skipped'
           ? ` · ⚪ ${t('skippedTag', {}, guildId)}`
           : '';
-
   const lines = [
     `**🎉 ${escapeMarkdownInline(event.title)}**${status}`,
     formatAnnouncementTime(event),
     `👥 **${capacity}** · ⏳ ~${formatDuration(event.durationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES, guildId)}${maybeCount ? ` · 🤔 ${t('cardMaybeCount', { count: maybeCount }, guildId)}` : ''}`,
   ];
-
   if (event.description) {
     const cleanDescription = String(event.description).replace(/\s+/g, ' ').trim();
     const shortDescription = [...cleanDescription].slice(0, 180).join('');
     lines.push(`📝 ${shortDescription}${[...cleanDescription].length > 180 ? '…' : ''}`);
   }
-
   if (event.status === 'scheduled' && !isEventStarted(event)) {
     lines.push('', t('cardRsvpHint', {}, guildId));
   } else if (event.status === 'in_progress') {
     lines.push('', t('eventStarted', {}, guildId));
   }
-
   return lines.join('\n');
 }
 
