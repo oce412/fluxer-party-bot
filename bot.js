@@ -294,8 +294,10 @@ client.on(Events.MessageCreate, async (message) => {
     if (!message.guildId) {
       // A new root command intentionally leaves the current creation conversation.
       // Plain-text replies continue to belong to the active wizard; explicit commands do not.
+      const startsOrRestartsWizard = command === 'create'
+        && (!tail || ['wizard', 'мастер', 'guided'].includes(tail.toLowerCase()));
       if (eventCreateSessions.has(message.author.id)
-        && command !== 'create'
+        && !startsOrRestartsWizard
         && !(command === 'cancel' && !tail)) {
         eventCreateSessions.delete(message.author.id);
         await message.author.send(t('createWizardCancelled', {}, null));
