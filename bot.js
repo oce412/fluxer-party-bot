@@ -528,31 +528,29 @@ async function fetchGuildMember(guild, userId) {
   return null;
 }
 async function isUserMemberInGuild(guildId, userId) {
-  let guild = client.guilds.get(guildId);
-  if (!guild) guild = await client.guilds.fetch(guildId).catch(() => null);
+  let guild = getCollectionItem(client.guilds, guildId) ?? getCollectionItem(client.guilds?.cache, guildId);
+  if (!guild && typeof client.guilds?.fetch === 'function') {
+    guild = await client.guilds.fetch(guildId).catch(() => null);
+  }
   if (!guild) return false;
-  if (guild.ownerId === userId || guild.owner_id === userId) return true;
-
-  let member = guild.members?.get(userId);
-  if (!member && typeof guild.fetchMember === 'function') {
-    member = await guild.fetchMember(userId).catch(() => null);
-  }
-  if (!member && typeof guild.members?.resolve === 'function') {
-    member = guild.members.resolve(userId) ?? null;
-  }
-  return Boolean(member);
+  const ownerId = guild.ownerId ?? guild.owner_id;
+  if (ownerId && String(ownerId) === String(userId)) return true;
+  return Boolean(await fetchGuildMember(guild, userId));
 }
 
 async function findMemberGuilds(userId) {
-  const candidates = collectionValues(client.guilds).filter((guild) => guild?.id && guild.available !== false);
+  const candidatesById = new Map();
+  for (const guild of collectionValues(client.guilds)) {
+    if (guild?.id && guild.available !== false) candidatesById.set(String(guild.id), guild);
+  }
   const accessible = [];
-  for (const candidate of candidates) {
+  for (const candidate of candidatesById.values()) {
     try {
       if (await isUserMemberInGuild(candidate.id, userId)) {
         accessible.push({ id: String(candidate.id), name: String(candidate.name ?? 'Unnamed server') });
       }
     } catch (error) {
-      logConsoleStyle('warn', `[DM server membership check failed for ${candidate.id}]`, error?.message ?? error);
+      logConsoleStyle('warn', '[DM server membership check failed for ' + candidate.id + ']', error?.message ?? error);
     }
   }
   return accessible.sort((a, b) => a.name.localeCompare(b.name));
@@ -563,29 +561,31 @@ async function selectDmGuild(message, pendingCommand = null, pendingArguments = 
   const accessible = await findMemberGuilds(userId);
   if (!accessible.length) {
     dmGuildSelectionSessions.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
     await message.author.send(t('dmNoServers', {}, null));
     return;
   }
 
   const input = String(requestedInput ?? '').trim();
-  if (!input && pendingCommand) {
-    const currentId = dmGuildSelections.get(userId);
-    const current = accessible.find((guild) => guild.id === currentId);
+  const activeGuildId = getActiveDmGuildContext(dmGuildContexts, userId);
+  if (!input && pendingCommand && activeGuildId) {
+    const current = accessible.find((guild) => guild.id === String(activeGuildId));
     if (current) {
       dmGuildSelectionSessions.delete(userId);
       await dispatchDmEventCommand(message, pendingCommand, pendingArguments, current.id);
       return;
     }
   }
+
   if (input) {
     const resolved = resolveGuildSelection(input, accessible);
     if (!resolved.ok) {
-      await message.author.send((resolved.reason === 'ambiguous'
+      await message.author.send(resolved.reason === 'ambiguous'
         ? t('dmServerAmbiguous', { options: formatDmGuildOptions(accessible) }, null)
-        : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(accessible) }, null)));
+        : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(accessible) }, null));
       return;
     }
-    dmGuildSelections.set(userId, resolved.guild.id);
+    setDmGuildContext(dmGuildContexts, userId, resolved.guild.id);
     dmGuildSelectionSessions.delete(userId);
     await message.author.send(t('dmServerSelected', { guild: resolved.guild.name }, resolved.guild.id));
     if (pendingCommand) await dispatchDmEventCommand(message, pendingCommand, pendingArguments, resolved.guild.id);
@@ -593,35 +593,34 @@ async function selectDmGuild(message, pendingCommand = null, pendingArguments = 
   }
 
   if (accessible.length === 1) {
-    dmGuildSelections.set(userId, accessible[0].id);
+    setDmGuildContext(dmGuildContexts, userId, accessible[0].id);
     dmGuildSelectionSessions.delete(userId);
-    if (pendingCommand) {
-      await dispatchDmEventCommand(message, pendingCommand, pendingArguments, accessible[0].id);
-    } else {
-      await message.author.send(t('dmServerSelected', { guild: accessible[0].name }, accessible[0].id));
-    }
+    if (pendingCommand) await dispatchDmEventCommand(message, pendingCommand, pendingArguments, accessible[0].id);
+    else await message.author.send(t('dmServerSelected', { guild: accessible[0].name }, accessible[0].id));
     return;
   }
 
+  const currentContext = peekDmGuildContext(dmGuildContexts, userId);
+  const currentGuild = currentContext
+    ? accessible.find((guild) => guild.id === String(currentContext.guildId))
+    : null;
   dmGuildSelectionSessions.set(userId, {
     guilds: accessible,
     pendingCommand,
     pendingArguments,
-    expiresAt: Date.now() + SETUP_SESSION_TTL_MS,
+    expiresAt: Date.now() + DM_GUILD_SELECTION_SESSION_TTL_MS,
   });
   await message.author.send(t('dmServerPrompt', {
     options: formatDmGuildOptions(accessible),
-    current: dmGuildSelections.has(userId)
-      ? (accessible.find((guild) => guild.id === dmGuildSelections.get(userId))?.name ?? t('dmNoCurrentServer', {}, null))
-      : t('dmNoCurrentServer', {}, null),
+    current: currentGuild?.name ?? t('dmNoCurrentServer', {}, null),
   }, null));
 }
 
 function formatDmGuildOptions(guilds) {
   const visible = guilds.slice(0, MAX_DM_GUILD_OPTIONS);
-  const lines = visible.map((guild, index) => `${index + 1}. **${guild.name}**`).join('\n');
-  const more = guilds.length > visible.length ? `\n${t('dmServerPromptMore', { count: guilds.length }, null)}` : '';
-  return `${lines}${more}`;
+  const lines = visible.map((guild, index) => (index + 1) + '. **' + guild.name + '**').join('\n');
+  const more = guilds.length > visible.length ? '\n' + t('dmServerPromptMore', { count: guilds.length }, null) : '';
+  return lines + more;
 }
 
 async function handleDmGuildSelectionInput(message, rawInput) {
@@ -640,19 +639,19 @@ async function handleDmGuildSelectionInput(message, rawInput) {
   }
   const resolved = resolveGuildSelection(input, session.guilds);
   if (!resolved.ok) {
-    await message.author.send((resolved.reason === 'ambiguous'
+    await message.author.send(resolved.reason === 'ambiguous'
       ? t('dmServerAmbiguous', { options: formatDmGuildOptions(session.guilds) }, null)
-      : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(session.guilds) }, null)));
+      : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(session.guilds) }, null));
     return;
   }
-
   if (!(await isUserMemberInGuild(resolved.guild.id, message.author.id))) {
     dmGuildSelectionSessions.delete(message.author.id);
+    clearDmGuildContext(dmGuildContexts, message.author.id);
     await message.author.send(t('dmServerNotMember', { guild: resolved.guild.name }, null));
     return;
   }
 
-  dmGuildSelections.set(message.author.id, resolved.guild.id);
+  setDmGuildContext(dmGuildContexts, message.author.id, resolved.guild.id);
   dmGuildSelectionSessions.delete(message.author.id);
   await message.author.send(t('dmServerSelected', { guild: resolved.guild.name }, resolved.guild.id));
   if (session.pendingCommand) {
@@ -662,11 +661,10 @@ async function handleDmGuildSelectionInput(message, rawInput) {
 
 async function dispatchDmEventCommand(message, command, rawArguments, guildId) {
   if (!(await isUserMemberInGuild(guildId, message.author.id))) {
-    dmGuildSelections.delete(message.author.id);
+    clearDmGuildContext(dmGuildContexts, message.author.id);
     await message.author.send(t('dmServerNotMember', { guild: guildId }, null));
     return;
   }
-
   switch (command) {
     case 'create':
       if (!rawArguments.trim() || ['wizard', 'мастер', 'guided'].includes(rawArguments.trim().toLowerCase())) {
@@ -677,32 +675,16 @@ async function dispatchDmEventCommand(message, command, rawArguments, guildId) {
         await message.author.send(t('createUsage', {}, guildId));
       }
       break;
-    case 'list':
-      await listEvents(message, guildId);
-      break;
-    case 'info':
-      await showEventInfo(message, rawArguments, guildId);
-      break;
-    case 'rsvp':
-      await commandRsvp(message, rawArguments, guildId);
-      break;
-    case 'cancel':
-      await cancelEvent(message, rawArguments, guildId);
-      break;
-    case 'manage':
-      await startEventManagement(message, rawArguments, guildId);
-      break;
-    case 'zones':
-      await privateResponse(message, t('zones', {}, guildId));
-      break;
-    case 'myzone':
-      await myZoneCommand(message, rawArguments, guildId);
-      break;
-    default:
-      await message.author.send(t('dmServerUsage', {}, guildId));
+    case 'list': await listEvents(message, guildId); break;
+    case 'info': await showEventInfo(message, rawArguments, guildId); break;
+    case 'rsvp': await commandRsvp(message, rawArguments, guildId); break;
+    case 'cancel': await cancelEvent(message, rawArguments, guildId); break;
+    case 'manage': await startEventManagement(message, rawArguments, guildId); break;
+    case 'zones': await privateResponse(message, t('zones', {}, guildId)); break;
+    case 'myzone': await myZoneCommand(message, rawArguments, guildId); break;
+    default: await message.author.send(t('dmServerUsage', {}, guildId));
   }
 }
-
 async function setupCommand(message, rawArguments) {
   const input = String(rawArguments ?? '').trim();
   if (!message.guildId) {
