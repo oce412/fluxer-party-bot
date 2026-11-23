@@ -8,7 +8,14 @@ const EVENT_COLORS = Object.freeze({
 
 function text(value, fallback = '—', maxLength = 1024) {
   const normalized = String(value ?? '').trim() || fallback;
-  return [...normalized].slice(0, maxLength).join('');
+  let output = '';
+  let units = 0;
+  for (const character of normalized) {
+    if (units + character.length > maxLength) break;
+    output += character;
+    units += character.length;
+  }
+  return output;
 }
 
 function attendeesOf(event) {
