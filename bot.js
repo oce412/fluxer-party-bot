@@ -502,9 +502,9 @@ async function selectDmGuild(message, pendingCommand = null, pendingArguments = 
   if (input) {
     const resolved = resolveGuildSelection(input, accessible);
     if (!resolved.ok) {
-      await message.author.send(t(resolved.reason === 'ambiguous' ? 'dmServerAmbiguous' : 'dmServerSelectionInvalid', {
-        options: formatDmGuildOptions(accessible),
-      }, null));
+      await message.author.send((resolved.reason === 'ambiguous'
+        ? t('dmServerAmbiguous', { options: formatDmGuildOptions(accessible) }, null)
+        : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(accessible) }, null)));
       return;
     }
     dmGuildSelections.set(userId, resolved.guild.id);
@@ -562,9 +562,9 @@ async function handleDmGuildSelectionInput(message, rawInput) {
   }
   const resolved = resolveGuildSelection(input, session.guilds);
   if (!resolved.ok) {
-    await message.author.send(t(resolved.reason === 'ambiguous' ? 'dmServerAmbiguous' : 'dmServerSelectionInvalid', {
-      options: formatDmGuildOptions(session.guilds),
-    }, null));
+    await message.author.send((resolved.reason === 'ambiguous'
+      ? t('dmServerAmbiguous', { options: formatDmGuildOptions(session.guilds) }, null)
+      : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(session.guilds) }, null)));
     return;
   }
 
