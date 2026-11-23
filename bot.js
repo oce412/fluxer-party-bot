@@ -2,6 +2,7 @@ import { Client, Events, PermissionFlags } from '@fluxerjs/core';
 import { canManageEvent, findGuildScopedEvent } from './src/authz.js';
 import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, fetchGuildMemberSafely, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
 import { getEventAttendees, getUpcomingEvents } from './src/event-list.js';
+import { buildEventAnnouncementEmbed, buildEventDetailsEmbed, buildUpcomingEventsEmbed } from './src/event-embeds.js';
 import { startHealthServer } from './src/health.js';
 import { isGatewayConnectionHealthy } from './src/gateway-health.js';
 import { log, logConsoleStyle } from './src/logger.js';
@@ -476,6 +477,27 @@ async function privateResponse(message, content, { deleteCommand = true } = {}) 
       await safeReply(message, t('dmFailed', {}, message.guildId));
     } catch (replyError) {
       logConsoleStyle('error', '[DM fallback failed]', replyError?.message ?? replyError);
+    }
+    return false;
+  }
+}
+
+async function privateEmbedResponse(message, embed, { deleteCommand = true } = {}) {
+  try {
+    await message.author.send({
+      embeds: [embed],
+      allowedMentions: { parse: [] },
+    });
+    if (deleteCommand && typeof message.delete === 'function') {
+      try { await message.delete(); } catch { /* Manage Messages is optional. */ }
+    }
+    return true;
+  } catch (error) {
+    logConsoleStyle('warn', '[DM embed response unavailable]', error?.message ?? error);
+    try {
+      await safeReply(message, t('dmFailed', {}, message.guildId));
+    } catch (replyError) {
+      logConsoleStyle('error', '[DM embed fallback failed]', replyError?.message ?? replyError);
     }
     return false;
   }
