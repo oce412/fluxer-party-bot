@@ -1602,34 +1602,41 @@ function parseRecurrence(input) {
 }
 
 async function listEvents(message, guildId = message.guildId) {
-  const now = DateTime.utc().toMillis();
-  const upcoming = allEvents()
-    .filter((event) => String(event.guildId) === String(guildId)
-      && event.status === 'scheduled'
-      && event.messageId
-      && DateTime.fromISO(event.startsAt, { zone: 'utc' }).toMillis() > now)
-    .sort((a, b) => DateTime.fromISO(a.startsAt).toMillis() - DateTime.fromISO(b.startsAt).toMillis())
-    .slice(0, 12);
-
+  const upcoming = getUpcomingEvents(allEvents(), guildId, Date.now(), 12);
   if (upcoming.length === 0) {
     await privateResponse(message, t('noUpcoming', {}, guildId));
     return;
   }
 
-  const guild = client.guilds.get(guildId);
+  const guild = getCollectionItem(client.guilds, guildId) ?? getCollectionItem(client.guilds?.cache, guildId);
   const channel = configForGuild(guildId).announcementChannelId;
   const header = t('dmEventLocation', {
     guild: guild?.name ?? guildId,
-    channel: channel ? `<#${channel}>` : t('dmUnknownChannel', {}, guildId),
+    channel: channel ? '<#' + channel + '>' : t('dmUnknownChannel', {}, guildId),
   }, guildId);
   const lines = upcoming.map((event) => {
-    const yesCount = event.attendees.filter((attendee) => attendee.status === 'yes').length;
-    const spots = event.maxAttendees === null ? `${yesCount} · ${langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit'}` : `${yesCount}/${event.maxAttendees}`;
-    return t('upcomingLine', { title: event.title, id: event.id, when: formatPersonalTime(event, message.author.id).replaceAll('\n', ' · '), spots }, guildId);
+    const attendees = getEventAttendees(event);
+    const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
+    const rawLimit = Number(event.maxAttendees);
+    const hasLimit = Number.isInteger(rawLimit) && rawLimit > 0;
+    const spots = hasLimit
+      ? yesCount + '/' + rawLimit
+      : yesCount + ' · ' + (langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit');
+    let when = String(event.startsAt);
+    try {
+      when = formatPersonalTime(event, message.author.id).replaceAll('\n', ' · ');
+    } catch (error) {
+      logConsoleStyle('warn', '[Event list time formatting failed for ' + String(event.id ?? 'unknown') + ']', error?.message ?? error);
+    }
+    return t('upcomingLine', {
+      title: String(event.title ?? 'Untitled event').slice(0, 100),
+      id: String(event.id ?? 'unknown'),
+      when,
+      spots,
+    }, guildId);
   });
-  await privateResponse(message, `${header}\n\n${t('upcomingTitle', {}, guildId)}\n${lines.join('\n')}\n\n${t('upcomingFooter', {}, guildId)}`);
+  await privateResponse(message, header + '\n\n' + t('upcomingTitle', {}, guildId) + '\n' + lines.join('\n') + '\n\n' + t('upcomingFooter', {}, guildId));
 }
-
 async function showEventInfo(message, idInput, guildId = message.guildId) {
   const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
