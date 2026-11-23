@@ -2314,7 +2314,7 @@ function renderEventDetails(event, userId) {
       community: t('dmCommunityLabel', {}, guildId),
       announcements: t('dmChannelLabel', {}, guildId),
       when: t('embedWhen', {}, guildId),
-      host: t('host', {}, guildId),
+      host: t('embedHost', {}, guildId),
       attendees: t('embedAttendees', {}, guildId),
       duration: t('embedDuration', {}, guildId),
       attendingNames: t('embedAttendingNames', {}, guildId),
