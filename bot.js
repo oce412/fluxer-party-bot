@@ -1,6 +1,6 @@
 import { Client, Events, PermissionFlags } from '@fluxerjs/core';
 import { canManageEvent, findGuildScopedEvent } from './src/authz.js';
-import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
+import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, fetchGuildMemberSafely, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
 import { getEventAttendees, getUpcomingEvents } from './src/event-list.js';
 import { startHealthServer } from './src/health.js';
 import { isGatewayConnectionHealthy } from './src/gateway-health.js';
@@ -519,15 +519,12 @@ function getCollectionItem(collection, id) {
 }
 
 async function fetchGuildMember(guild, userId) {
-  let member = getCollectionItem(guild?.members, userId) ?? getCollectionItem(guild?.members?.cache, userId);
-  if (member) return member;
-  if (typeof guild?.members?.fetch === 'function') {
-    try { member = await guild.members.fetch(userId); if (member) return member; } catch { /* Try fetchMember below. */ }
+  try {
+    return await fetchGuildMemberSafely(guild, userId);
+  } catch (error) {
+    logConsoleStyle('warn', '[Guild member lookup failed for ' + userId + ' in ' + guild?.id + ']', error?.message ?? error);
+    return null;
   }
-  if (typeof guild?.fetchMember === 'function') {
-    try { member = await guild.fetchMember(userId); if (member) return member; } catch { /* Non-member or unavailable endpoint. */ }
-  }
-  return null;
 }
 async function isUserMemberInGuild(guildId, userId) {
   let guild = getCollectionItem(client.guilds, guildId) ?? getCollectionItem(client.guilds?.cache, guildId);
@@ -863,17 +860,23 @@ function collectionValues(collection) {
 }
 
 async function isUserAdminInGuild(guildId, userId) {
-  let guild = client.guilds.get(guildId);
-  if (!guild) guild = await client.guilds.fetch(guildId);
+  let guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  if (!guild && typeof client.guilds?.fetch === 'function') {
+    try {
+      guild = await client.guilds.fetch(guildId);
+    } catch (error) {
+      logConsoleStyle('warn', '[Admin check guild fetch failed for ' + guildId + ']', error?.message ?? error);
+      return false;
+    }
+  }
   if (!guild) return false;
-  if (guild.ownerId === userId || guild.owner_id === userId) return true;
-  let member = guild.members?.get(userId);
-  if (!member && typeof guild.fetchMember === 'function') member = await guild.fetchMember(userId);
-  if (!member && guild.members?.resolve) member = await guild.members.resolve(userId);
+  const ownerId = guild.ownerId ?? guild.owner_id;
+  if (ownerId && String(ownerId) === String(userId)) return true;
+  const member = await fetchGuildMember(guild, userId);
   return Boolean(member?.permissions?.has(PermissionFlags.ManageGuild)
     || member?.permissions?.has(PermissionFlags.Administrator)
-    || guild.ownerId === userId
-    || guild.owner_id === userId);
+    || (ownerId && String(ownerId) === String(userId)));
 }
 
 function listSetupChannels(guild, preferredChannelId = null, existingChannelId = null) {
