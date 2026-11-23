@@ -1,6 +1,7 @@
 import { Client, Events, PermissionFlags } from '@fluxerjs/core';
 import { canManageEvent, findGuildScopedEvent } from './src/authz.js';
-import { resolveGuildSelection } from './src/dm-context.js';
+import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
+import { getEventAttendees, getUpcomingEvents } from './src/event-list.js';
 import { startHealthServer } from './src/health.js';
 import { isGatewayConnectionHealthy } from './src/gateway-health.js';
 import { log, logConsoleStyle } from './src/logger.js';
@@ -205,10 +206,11 @@ const publishingEventIds = new Set();
 const setupSessions = new Map();
 const hostManageSessions = new Map();
 const eventCreateSessions = new Map();
-const dmGuildSelections = new Map();
+const dmGuildContexts = new Map();
 const dmGuildSelectionSessions = new Map();
 const SETUP_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_DM_GUILD_OPTIONS = 20;
+const DM_GUILD_SELECTION_SESSION_TTL_MS = DM_GUILD_CONTEXT_TTL_MS;
 const EVENT_CREATE_SESSION_TTL_MS = 30 * 60 * 1000;
 const EVENT_CREATE_STEPS = ['dateTime', 'timeZone', 'limit', 'repeat', 'duration', 'notifyOnStart', 'title', 'description', 'confirm'];
 const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration'];
@@ -459,7 +461,9 @@ async function safeReply(message, content) {
 
 async function privateResponse(message, content, { deleteCommand = true } = {}) {
   try {
-    await message.author.send(content);
+    for (const chunk of splitPrivateMessageContent(content)) {
+      await message.author.send(chunk);
+    }
     if (deleteCommand && typeof message.delete === 'function') {
       try { await message.delete(); } catch { /* Manage Messages is optional. */ }
     }
@@ -475,6 +479,54 @@ async function privateResponse(message, content, { deleteCommand = true } = {}) 
   }
 }
 
+function splitPrivateMessageContent(content, maxLength = 1800) {
+  const text = String(content ?? '');
+  if (text.length <= maxLength) return [text];
+  const chunks = [];
+  let current = '';
+  for (const sourceLine of text.split('\n')) {
+    let line = sourceLine;
+    while (line.length > maxLength) {
+      if (current) { chunks.push(current); current = ''; }
+      chunks.push(line.slice(0, maxLength));
+      line = line.slice(maxLength);
+    }
+    const separatorLength = current ? 1 : 0;
+    if (current.length + separatorLength + line.length > maxLength) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current += (current ? '\n' : '') + line;
+    }
+  }
+  if (current || chunks.length === 0) chunks.push(current);
+  return chunks;
+}
+
+function getCollectionItem(collection, id) {
+  if (!collection) return null;
+  if (typeof collection.get === 'function') {
+    try { const value = collection.get(id); if (value) return value; } catch { /* Try other shapes. */ }
+  }
+  if (collection.cache && typeof collection.cache.get === 'function') {
+    try { const value = collection.cache.get(id); if (value) return value; } catch { /* Try array/object lookup. */ }
+  }
+  if (Array.isArray(collection)) return collection.find((item) => String(item?.id) === String(id)) ?? null;
+  if (typeof collection === 'object' && Object.prototype.hasOwnProperty.call(collection, id)) return collection[id] ?? null;
+  return null;
+}
+
+async function fetchGuildMember(guild, userId) {
+  let member = getCollectionItem(guild?.members, userId) ?? getCollectionItem(guild?.members?.cache, userId);
+  if (member) return member;
+  if (typeof guild?.members?.fetch === 'function') {
+    try { member = await guild.members.fetch(userId); if (member) return member; } catch { /* Try fetchMember below. */ }
+  }
+  if (typeof guild?.fetchMember === 'function') {
+    try { member = await guild.fetchMember(userId); if (member) return member; } catch { /* Non-member or unavailable endpoint. */ }
+  }
+  return null;
+}
 async function isUserMemberInGuild(guildId, userId) {
   let guild = client.guilds.get(guildId);
   if (!guild) guild = await client.guilds.fetch(guildId).catch(() => null);
