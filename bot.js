@@ -292,6 +292,14 @@ client.on(Events.MessageCreate, async (message) => {
     const command = aliases.get(rawCommand) ?? rawCommand;
 
     if (!message.guildId) {
+      // A new root command intentionally leaves the current creation conversation.
+      // Plain-text replies continue to belong to the active wizard; explicit commands do not.
+      if (eventCreateSessions.has(message.author.id)
+        && command !== 'create'
+        && !(command === 'cancel' && !tail)) {
+        eventCreateSessions.delete(message.author.id);
+        await message.author.send(t('createWizardCancelled', {}, null));
+      }
       if (command === 'language') {
         await languageSupportCommand(message, tail, null);
       } else if (command === 'setup') {
@@ -1633,7 +1641,7 @@ async function cancelEvent(message, idInput, guildId = message.guildId) {
     return;
   }
   if (event.status === 'cancelled') {
-    await privateResponse(message, t('alreadyCancelled', {}, message.guildId));
+    await privateResponse(message, t('alreadyCancelled', {}, guildId));
     return;
   }
 
