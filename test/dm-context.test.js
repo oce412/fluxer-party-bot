@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from '../src/dm-context.js';
+import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, fetchGuildMemberSafely, getActiveDmGuildContext, isGuildMemberNotFound, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from '../src/dm-context.js';
 
 const guilds = [
   { id: '100', name: 'Board Games' },
@@ -76,4 +76,67 @@ test('DM community contexts are isolated per user', () => {
   clearDmGuildContext(contexts, 'user-1');
   assert.equal(getActiveDmGuildContext(contexts, 'user-1', { now }), null);
   assert.equal(getActiveDmGuildContext(contexts, 'user-2', { now }), '200');
+});
+
+
+test('awaits Fluxer member manager resolve and returns the fetched member', async () => {
+  const expected = { id: 'user-1' };
+  let resolveCalls = 0;
+  const guild = {
+    members: {
+      get: () => null,
+      resolve: async (userId) => {
+        resolveCalls += 1;
+        assert.equal(userId, 'user-1');
+        return expected;
+      },
+    },
+  };
+  assert.equal(await fetchGuildMemberSafely(guild, 'user-1'), expected);
+  assert.equal(resolveCalls, 1);
+});
+
+test('treats a Fluxer MEMBER_NOT_FOUND rejection as a normal non-membership result', async () => {
+  const guild = {
+    members: {
+      get: () => null,
+      resolve: async () => {
+        throw Object.assign(new Error('Member not found in guild'), { code: 'MEMBER_NOT_FOUND' });
+      },
+      fetch: () => {
+        throw new Error('fetch should not be called when resolve is available');
+      },
+    },
+  };
+  assert.equal(await fetchGuildMemberSafely(guild, 'user-not-in-this-guild'), null);
+});
+
+test('recognizes nested Fluxer UNKNOWN_MEMBER 404 errors', () => {
+  const error = Object.assign(new Error('Fluxer API error'), {
+    code: 'MEMBER_NOT_FOUND',
+    cause: Object.assign(new Error("Member wasn't found in this community."), {
+      code: 'UNKNOWN_MEMBER',
+      statusCode: 404,
+    }),
+  });
+  assert.equal(isGuildMemberNotFound(error), true);
+});
+
+test('does not hide unrelated member-fetch errors', async () => {
+  const expected = Object.assign(new Error('Rate limited'), { code: 'RATE_LIMITED', statusCode: 429 });
+  const guild = { members: { get: () => null, resolve: async () => { throw expected; } } };
+  await assert.rejects(fetchGuildMemberSafely(guild, 'user-1'), (error) => error === expected);
+});
+
+test('uses an already cached member without making a REST request', async () => {
+  const expected = { id: 'cached-user' };
+  let resolveCalls = 0;
+  const guild = {
+    members: {
+      get: (userId) => userId === 'cached-user' ? expected : null,
+      resolve: async () => { resolveCalls += 1; throw new Error('should not fetch'); },
+    },
+  };
+  assert.equal(await fetchGuildMemberSafely(guild, 'cached-user'), expected);
+  assert.equal(resolveCalls, 0);
 });
