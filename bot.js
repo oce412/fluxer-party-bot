@@ -1135,6 +1135,10 @@ async function languageSupportCommand(message, rawArguments, guildId) {
     await privateResponse(message, t('languageSupportInfo', { languages: languageNames }, guildId));
     return;
   }
+  if (['credits', 'credit', 'contributors', 'авторы', 'участники', 'благодарности'].includes(action)) {
+    await privateResponse(message, t('languageCredits', {}, guildId));
+    return;
+  }
   if (['request', 'запрос', 'запросить', 'нужен'].includes(action)) {
     const response = requestUrl
       ? t('languageRequestFormReady', { url: requestUrl }, guildId)
