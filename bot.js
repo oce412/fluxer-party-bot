@@ -204,10 +204,13 @@ let schedulerBusy = false;
 const publishingEventIds = new Set();
 const setupSessions = new Map();
 const hostManageSessions = new Map();
+const eventCreateSessions = new Map();
 const dmGuildSelections = new Map();
 const dmGuildSelectionSessions = new Map();
 const SETUP_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_DM_GUILD_OPTIONS = 20;
+const EVENT_CREATE_SESSION_TTL_MS = 30 * 60 * 1000;
+const EVENT_CREATE_STEPS = ['dateTime', 'timeZone', 'limit', 'repeat', 'duration', 'notifyOnStart', 'title', 'description', 'confirm'];
 const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration'];
 
 client.on(Events.Error, (error) => {
@@ -254,6 +257,10 @@ client.on(Events.MessageCreate, async (message) => {
 
     const rootMatch = text.match(/^!(event|событие|ивент)(?:\s+([\s\S]*))?$/i);
     if (!message.guildId && !rootMatch) {
+      if (eventCreateSessions.has(message.author.id)) {
+        await handleEventCreateWizardAnswer(message, text);
+        return;
+      }
       if (hostManageSessions.has(message.author.id)) {
         await handleHostManageInput(message, text);
         return;
@@ -291,6 +298,9 @@ client.on(Events.MessageCreate, async (message) => {
         await setupCommand(message, tail);
       } else if (command === 'server') {
         await selectDmGuild(message, null, null, tail);
+      } else if (command === 'cancel' && !tail && eventCreateSessions.has(message.author.id)) {
+        eventCreateSessions.delete(message.author.id);
+        await message.author.send(t('createWizardCancelled', {}, null));
       } else if (command === 'manage') {
         const selectedGuildId = dmGuildSelections.get(message.author.id);
         if (selectedGuildId) await dispatchDmEventCommand(message, command, tail, selectedGuildId);
@@ -316,7 +326,13 @@ client.on(Events.MessageCreate, async (message) => {
         await privateResponse(message, t('help', {}, message.guildId));
         break;
       case 'create':
-        await createEventSeries(message, tail);
+        if (!tail || ['wizard', 'мастер', 'guided'].includes(tail.toLowerCase())) {
+          await startEventCreationWizard(message, message.guildId);
+        } else if (tail.includes('|')) {
+          await createEventSeries(message, tail, message.guildId);
+        } else {
+          await privateResponse(message, t('createUsage', {}, message.guildId));
+        }
         break;
       case 'list':
         await listEvents(message, message.guildId);
@@ -591,10 +607,12 @@ async function dispatchDmEventCommand(message, command, rawArguments, guildId) {
 
   switch (command) {
     case 'create':
-      if (!rawArguments.trim()) {
-        await message.author.send(t('createUsage', {}, guildId));
-      } else {
+      if (!rawArguments.trim() || ['wizard', 'мастер', 'guided'].includes(rawArguments.trim().toLowerCase())) {
+        await startEventCreationWizard(message, guildId);
+      } else if (rawArguments.includes('|')) {
         await createEventSeries(message, rawArguments, guildId);
+      } else {
+        await message.author.send(t('createUsage', {}, guildId));
       }
       break;
     case 'list':
@@ -1074,36 +1092,283 @@ function safeConfiguredFormUrl(rawValue) {
   }
 }
 
+async function startEventCreationWizard(message, guildId) {
+  const config = configForGuild(guildId);
+  if (!config.announcementChannelId) {
+    await privateResponse(message, t('noChannelConfigured', {}, guildId));
+    return;
+  }
+
+  setupSessions.delete(message.author.id);
+  hostManageSessions.delete(message.author.id);
+  dmGuildSelectionSessions.delete(message.author.id);
+
+  const session = {
+    guildId,
+    steps: [...EVENT_CREATE_STEPS],
+    stepIndex: 0,
+    values: {
+      dateTime: '',
+      timeZone: config.defaultTimeZone,
+      maxAttendees: null,
+      recurrence: { ok: true, frequency: null, count: 1 },
+      durationMinutes: config.eventDurationMinutes,
+      durationWasDefaulted: false,
+      notifyOnStart: false,
+      title: '',
+      description: '',
+    },
+    expiresAt: Date.now() + EVENT_CREATE_SESSION_TTL_MS,
+  };
+  eventCreateSessions.set(message.author.id, session);
+
+  try {
+    await message.author.send(t('createWizardIntro', {}, guildId));
+    await promptEventCreateWizardStep(message.author, session);
+    if (message.guildId) await tryDeleteCommand(message);
+  } catch (error) {
+    eventCreateSessions.delete(message.author.id);
+    logConsoleStyle('warn', '[Event creation wizard DM failed]', error?.message ?? error);
+    if (message.guildId) {
+      await privateResponse(message, t('dmFailed', {}, guildId), { deleteCommand: false });
+    } else {
+      await message.author.send(t('dmFailed', {}, guildId)).catch(() => {});
+    }
+  }
+}
+
+async function promptEventCreateWizardStep(user, session) {
+  session.expiresAt = Date.now() + EVENT_CREATE_SESSION_TTL_MS;
+  const guildId = session.guildId;
+  const values = session.values;
+  const step = session.steps[session.stepIndex];
+
+  if (step === 'dateTime') {
+    await user.send(t('createWizardAskDate', {}, guildId));
+  } else if (step === 'timeZone') {
+    await user.send(t('createWizardAskTimezone', { zone: values.timeZone }, guildId));
+  } else if (step === 'limit') {
+    const current = values.maxAttendees === null ? t('cardNoLimit', {}, guildId) : String(values.maxAttendees);
+    await user.send(t('createWizardAskLimit', { current }, guildId));
+  } else if (step === 'repeat') {
+    const current = values.recurrence.count > 1
+      ? `${values.recurrence.frequency}:${values.recurrence.count}`
+      : t('createWizardOnce', {}, guildId);
+    await user.send(t('createWizardAskRepeat', { current }, guildId));
+  } else if (step === 'duration') {
+    await user.send(t('createWizardAskDuration', { duration: values.durationMinutes }, guildId));
+  } else if (step === 'notifyOnStart') {
+    await user.send(t('createWizardAskNotify', { current: values.notifyOnStart ? 'yes' : 'no' }, guildId));
+  } else if (step === 'title') {
+    await user.send(t('createWizardAskTitle', { current: values.title || '—' }, guildId));
+  } else if (step === 'description') {
+    await user.send(t('createWizardAskDescription', { current: values.description || '—' }, guildId));
+  } else if (step === 'confirm') {
+    const zonedStart = DateTime.fromFormat(values.dateTime, 'yyyy-MM-dd HH:mm', {
+      zone: values.timeZone,
+      setZone: true,
+      locale: localeForGuild(guildId),
+      numberingSystem: 'latn',
+    });
+    const limit = values.maxAttendees === null ? t('cardNoLimit', {}, guildId) : String(values.maxAttendees);
+    const repeat = values.recurrence.count > 1
+      ? `${values.recurrence.frequency}:${values.recurrence.count}`
+      : t('createWizardOnce', {}, guildId);
+    const preview = t('createWizardPreview', {
+      title: values.title,
+      when: zonedStart.isValid ? formatShortDateTime(zonedStart, guildId) : values.dateTime,
+      zone: values.timeZone,
+      limit,
+      repeat,
+      duration: values.durationMinutes,
+      notify: values.notifyOnStart ? t('createWizardNotifyYes', {}, guildId) : t('createWizardNotifyNo', {}, guildId),
+      description: values.description || t('noDescription', {}, guildId),
+    }, guildId);
+    await user.send(`${preview}\n\n${t('createWizardConfirm', {}, guildId)}\n\n${t('createWizardBackHint', {}, guildId)}`);
+  }
+}
+
+async function handleEventCreateWizardAnswer(message, rawInput) {
+  const userId = message.author.id;
+  const session = eventCreateSessions.get(userId);
+  if (!session) return;
+
+  if (session.expiresAt <= Date.now()) {
+    eventCreateSessions.delete(userId);
+    await message.author.send(t('createWizardExpired', {}, session.guildId));
+    return;
+  }
+
+  if (!(await isUserMemberInGuild(session.guildId, userId))) {
+    eventCreateSessions.delete(userId);
+    dmGuildSelections.delete(userId);
+    await message.author.send(t('dmServerNotMember', { guild: session.guildId }, null));
+    return;
+  }
+
+  const guildId = session.guildId;
+  const input = String(rawInput ?? '').trim();
+  const normalized = input.toLowerCase();
+  const step = session.steps[session.stepIndex];
+
+  if (['cancel', 'отмена', 'стоп', 'stop'].includes(normalized)) {
+    eventCreateSessions.delete(userId);
+    await message.author.send(t('createWizardCancelled', {}, guildId));
+    return;
+  }
+
+  if (['back', 'назад'].includes(normalized)) {
+    if (session.stepIndex === 0) {
+      await message.author.send(t('createWizardFirstStep', {}, guildId));
+      return;
+    }
+    session.stepIndex -= 1;
+    await promptEventCreateWizardStep(message.author, session);
+    return;
+  }
+
+  const skip = ['', 'skip', 'default', 'по умолчанию', 'пропустить'].includes(normalized);
+
+  if (step === 'dateTime') {
+    const dateTime = normalizeLocalDateTimeInput(input);
+    if (!dateTime) {
+      await message.author.send(t('dateInvalid', {}, guildId));
+      return;
+    }
+    session.values.dateTime = dateTime;
+  } else if (step === 'timeZone') {
+    const timeZone = skip ? configForGuild(guildId).defaultTimeZone : resolveTimeZone(input, guildId);
+    if (!validTimeZone(timeZone)) {
+      await message.author.send(t('zoneInvalid', { zone: input }, guildId));
+      return;
+    }
+    const zonedStart = DateTime.fromFormat(session.values.dateTime, 'yyyy-MM-dd HH:mm', {
+      zone: timeZone,
+      setZone: true,
+      locale: localeForGuild(guildId),
+      numberingSystem: 'latn',
+    });
+    if (!zonedStart.isValid || zonedStart.toFormat('yyyy-MM-dd HH:mm') !== session.values.dateTime) {
+      await message.author.send(t('nonexistentTime', { zone: timeZone }, guildId));
+      return;
+    }
+    if (zonedStart.toMillis() <= Date.now() + 60_000) {
+      await message.author.send(t('timePast', {}, guildId));
+      return;
+    }
+    session.values.timeZone = timeZone;
+  } else if (step === 'limit') {
+    if (skip || ['none', '-', 'no limit', 'без лимита', 'безлимит'].includes(normalized)) {
+      session.values.maxAttendees = null;
+    } else {
+      const limit = Number(input);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+        await message.author.send(t('limitInvalid', {}, guildId));
+        return;
+      }
+      session.values.maxAttendees = limit;
+    }
+  } else if (step === 'repeat') {
+    const recurrence = parseRecurrence(skip ? '1' : input);
+    if (!recurrence.ok) {
+      await message.author.send(t('repeatInvalid', {}, guildId));
+      return;
+    }
+    session.values.recurrence = recurrence;
+  } else if (step === 'duration') {
+    const resolved = skip
+      ? { minutes: configForGuild(guildId).eventDurationMinutes, defaulted: false }
+      : resolveDurationMinutes(input, configForGuild(guildId).eventDurationMinutes);
+    session.values.durationMinutes = resolved.minutes;
+    session.values.durationWasDefaulted = resolved.defaulted;
+    if (resolved.defaulted) {
+      await message.author.send(t('createDurationDefaulted', { duration: resolved.minutes }, guildId));
+    }
+  } else if (step === 'notifyOnStart') {
+    const notify = skip ? false : parseOptionalBoolean(input);
+    if (notify === null) {
+      await message.author.send(t('createNotifyInvalid', {}, guildId));
+      return;
+    }
+    session.values.notifyOnStart = notify;
+  } else if (step === 'title') {
+    if (!input || input.length > 100) {
+      await message.author.send(t('titleInvalid', {}, guildId));
+      return;
+    }
+    session.values.title = input;
+  } else if (step === 'description') {
+    const description = skip || input === '-' ? '' : input;
+    if (description.length > 700) {
+      await message.author.send(t('descriptionInvalid', {}, guildId));
+      return;
+    }
+    session.values.description = description;
+  } else if (step === 'confirm') {
+    if (['yes', 'y', 'да', 'confirm', 'publish', 'создать'].includes(normalized)) {
+      const zonedStart = DateTime.fromFormat(session.values.dateTime, 'yyyy-MM-dd HH:mm', {
+        zone: session.values.timeZone,
+        setZone: true,
+        locale: localeForGuild(guildId),
+        numberingSystem: 'latn',
+      });
+      if (!zonedStart.isValid || zonedStart.toMillis() <= Date.now() + 60_000) {
+        await message.author.send(t('timePast', {}, guildId));
+        session.stepIndex = 0;
+        await promptEventCreateWizardStep(message.author, session);
+        return;
+      }
+      eventCreateSessions.delete(userId);
+      await publishEventSeries(message, guildId, {
+        title: session.values.title,
+        description: session.values.description,
+        zonedStart,
+        timeZone: session.values.timeZone,
+        maxAttendees: session.values.maxAttendees,
+        recurrence: session.values.recurrence,
+        durationMinutes: session.values.durationMinutes,
+        durationWasDefaulted: session.values.durationWasDefaulted,
+        notifyOnStart: session.values.notifyOnStart,
+      });
+      return;
+    }
+    if (['no', 'n', 'нет', 'abort', 'отменить'].includes(normalized)) {
+      eventCreateSessions.delete(userId);
+      await message.author.send(t('createWizardCancelled', {}, guildId));
+      return;
+    }
+    await message.author.send(t('createWizardConfirm', {}, guildId));
+    return;
+  }
+
+  session.stepIndex += 1;
+  session.expiresAt = Date.now() + EVENT_CREATE_SESSION_TTL_MS;
+  await promptEventCreateWizardStep(message.author, session);
+}
+
 async function createEventSeries(message, rawArguments, guildId = message.guildId) {
-  const raw = rawArguments.trim().replace(/^\|/, '').trim();
+  const raw = String(rawArguments ?? '').trim().replace(/^\|/, '').trim();
   const fields = raw.split('|').map((field) => field.trim());
   if (fields.length < 6 || fields.length > 8) {
     await replyCreateError(message, t('createUsage', {}, guildId), guildId);
     return;
   }
-
   const [title, dateInput, rawTimeZone, maxInput, descriptionInput, repeatInput] = fields;
   let durationInput = fields[6];
   let notifyStartInput = fields[7];
-  // Friendly short form: a final yes/no directly after recurrence means notify-on-start.
   if (fields.length === 7 && ['yes', 'no', 'да', 'нет', 'true', 'false', 'on', 'off'].includes(String(fields[6] ?? '').toLowerCase())) {
     notifyStartInput = fields[6];
     durationInput = '';
   }
-
   const description = descriptionInput === '-' ? '' : descriptionInput;
   const timeZone = resolveTimeZone(rawTimeZone, guildId);
   const config = configForGuild(guildId);
-  const { minutes: durationMinutes, defaulted: durationWasDefaulted } = resolveDurationMinutes(
-    durationInput,
-    config.eventDurationMinutes,
-  );
+  const { minutes: durationMinutes, defaulted: durationWasDefaulted } = resolveDurationMinutes(durationInput, config.eventDurationMinutes);
   const notifyOnStart = parseOptionalBoolean(notifyStartInput);
   if (notifyOnStart === null) {
     await replyCreateError(message, t('createNotifyInvalid', {}, guildId), guildId);
     return;
   }
-
   if (!title || title.length > 100) {
     await replyCreateError(message, t('titleInvalid', {}, guildId), guildId);
     return;
@@ -1121,7 +1386,6 @@ async function createEventSeries(message, rawArguments, guildId = message.guildI
     await replyCreateError(message, t('dateInvalid', {}, guildId), guildId);
     return;
   }
-
   const zonedStart = DateTime.fromFormat(normalizedDateInput, 'yyyy-MM-dd HH:mm', {
     zone: timeZone,
     setZone: true,
@@ -1140,7 +1404,6 @@ async function createEventSeries(message, rawArguments, guildId = message.guildI
     await replyCreateError(message, t('timePast', {}, guildId), guildId);
     return;
   }
-
   let maxAttendees = null;
   if (maxInput && !['none', '-', 'без лимита', 'безлимит', 'no limit'].includes(maxInput.toLowerCase())) {
     const parsedLimit = Number(maxInput);
@@ -1150,13 +1413,22 @@ async function createEventSeries(message, rawArguments, guildId = message.guildI
     }
     maxAttendees = parsedLimit;
   }
-
   const recurrence = parseRecurrence(repeatInput);
   if (!recurrence.ok) {
     await replyCreateError(message, t('repeatInvalid', {}, guildId), guildId);
     return;
   }
+  await publishEventSeries(message, guildId, {
+    title, description, zonedStart, timeZone, maxAttendees, recurrence,
+    durationMinutes, durationWasDefaulted, notifyOnStart,
+  });
+}
 
+async function publishEventSeries(message, guildId, {
+  title, description, zonedStart, timeZone, maxAttendees, recurrence,
+  durationMinutes, durationWasDefaulted = false, notifyOnStart = false,
+}) {
+  const config = configForGuild(guildId);
   if (!config.announcementChannelId) {
     await privateResponse(message, t('noChannelConfigured', {}, guildId));
     return;
@@ -1181,7 +1453,6 @@ async function createEventSeries(message, rawArguments, guildId = message.guildI
       if (recurrence.frequency === 'weekly') occurrenceStart = zonedStart.plus({ weeks: index });
       if (recurrence.frequency === 'monthly') occurrenceStart = zonedStart.plus({ months: index });
     }
-
     occurrences.push({
       id: newEventId(),
       seriesId,
@@ -1221,9 +1492,7 @@ async function createEventSeries(message, rawArguments, guildId = message.guildI
     ? t('createdMany', { count: recurrence.count, title, id: first.id, when: timeLabel }, guildId)
     : t('createdOne', { title, id: first.id, when: timeLabel }, guildId);
   const manageHint = t('hostManageCommandHint', { id: first.id, command: manageCommandForGuild(guildId) }, guildId);
-  const durationNote = durationWasDefaulted
-    ? `\n\n${t('createDurationDefaulted', { duration: durationMinutes }, guildId)}`
-    : '';
+  const durationNote = durationWasDefaulted ? `\n\n${t('createDurationDefaulted', { duration: durationMinutes }, guildId)}` : '';
   const startNoticeNote = notifyOnStart ? `\n${t('createStartNoticeEnabled', {}, guildId)}` : '';
   const delivered = await privateResponse(message, `${confirmation}\n\n${t('createNote', {}, guildId)}${durationNote}${startNoticeNote}\n\n${manageHint}`);
   if (delivered) setupSessions.delete(message.author.id);
