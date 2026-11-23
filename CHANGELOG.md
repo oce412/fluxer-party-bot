@@ -21,7 +21,8 @@
 ## v0.9.0 — DM event workflow (in development)
 
 - Add per-user community selection for event commands in DMs, with membership checks before each operation.
-- Support DM event creation using the existing command format, plus list, info, RSVP, cancel and host management.
+- Support guided event creation in server channels and DMs, plus the existing advanced command format.
+- Add server selection, list, info, RSVP, cancel and host management from DMs.
 - Include community and announcement-channel pointers in event detail responses.
 - Re-check the user's membership in the selected community before every DM action; DM event management remains host-only.
 - Keep DM management host-only and scope event lookup to the selected community.
