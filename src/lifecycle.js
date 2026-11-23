@@ -4,6 +4,25 @@ export function hasActivePublishedOccurrence(events) {
     && ['scheduled', 'in_progress'].includes(event.status));
 }
 
+/** Whether an opted-in event needs its one-time start notice queued. */
+export function shouldQueueEventStartNotice(event) {
+  return event?.notifyOnStart === true
+    && event.status === 'in_progress'
+    && !event.startNoticeQueuedAt;
+}
+
+/** Unique host + yes/maybe RSVP recipients for an event-start notice. */
+export function getEventStartNoticeRecipients(event) {
+  const recipients = new Set();
+  if (event?.creatorId) recipients.add(String(event.creatorId));
+  for (const attendee of event?.attendees ?? []) {
+    if (['yes', 'maybe'].includes(attendee.status) && attendee.userId) {
+      recipients.add(String(attendee.userId));
+    }
+  }
+  return [...recipients];
+}
+
 /** Classifies a reminder relative to its due time and grace window. */
 export function getReminderWindow(nowMs, startsAtMs, offsetMinutes, graceMinutes) {
   const dueAtMs = startsAtMs - offsetMinutes * 60_000;
