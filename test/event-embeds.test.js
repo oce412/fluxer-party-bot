@@ -50,6 +50,7 @@ test('announcement embeds reflect event status and omit an empty description', (
     status: 'cancelled',
     description: ' ',
     attendees: [],
+    maxAttendees: null,
   }, {
     when: 'Cancelled',
     duration: '2h',
