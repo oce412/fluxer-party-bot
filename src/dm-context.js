@@ -63,3 +63,48 @@ export function setDmGuildContext(contexts, userId, guildId, {
 export function clearDmGuildContext(contexts, userId) {
   return contexts.delete(userId);
 }
+
+/** Identify the normal 404 response produced when a user is not in a community. */
+export function isGuildMemberNotFound(error) {
+  const candidates = [error, error?.cause].filter(Boolean);
+  return candidates.some((candidate) => {
+    const code = String(candidate.code ?? '').toUpperCase();
+    return code === 'MEMBER_NOT_FOUND'
+      || code === 'UNKNOWN_MEMBER'
+      || candidate.statusCode === 404
+      || candidate.status === 404;
+  });
+}
+
+/**
+ * Fetch a member without leaking a rejected SDK promise.
+ * Fluxer.js v3.3 exposes members.resolve() as an async cache-or-REST lookup.
+ */
+export async function fetchGuildMemberSafely(guild, userId) {
+  const manager = guild?.members;
+  let cached = null;
+  try {
+    if (typeof manager?.get === 'function') cached = manager.get(userId) ?? null;
+    if (!cached && typeof manager?.cache?.get === 'function') cached = manager.cache.get(userId) ?? null;
+  } catch {
+    // A cache miss is not an error; continue to a guarded fetch.
+  }
+  if (cached) return cached;
+
+  let receiver = manager;
+  let fetchMember = manager?.resolve;
+  if (typeof fetchMember !== 'function') fetchMember = manager?.fetch;
+  if (typeof fetchMember !== 'function') {
+    receiver = guild;
+    fetchMember = guild?.fetchMember;
+  }
+  if (typeof fetchMember !== 'function') return null;
+
+  try {
+    return await fetchMember.call(receiver, userId) ?? null;
+  } catch (error) {
+    if (isGuildMemberNotFound(error)) return null;
+    throw error;
+  }
+}
+
