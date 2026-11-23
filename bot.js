@@ -3,10 +3,11 @@ import { canManageEvent, findGuildScopedEvent } from './src/authz.js';
 import { startHealthServer } from './src/health.js';
 import { isGatewayConnectionHealthy } from './src/gateway-health.js';
 import { log, logConsoleStyle } from './src/logger.js';
-import { DateTime, IANAZone } from 'luxon';
+import { DateTime } from 'luxon';
 import { randomUUID } from 'node:crypto';
 import { availableLocales, hasLocale, translate as translateText } from './src/i18n.js';
-import { getReminderWindow, hasActivePublishedOccurrence } from './src/lifecycle.js';
+import { getEventStartNoticeRecipients, getReminderWindow, hasActivePublishedOccurrence, shouldQueueEventStartNotice } from './src/lifecycle.js';
+import { isSupportedTimeZone, normalizeFixedOffsetTimeZone, normalizeLocalDateTimeInput, resolveDurationMinutes } from './src/time-input.js';
 import { compactNoticeOutbox, completeNoticeIfDelivered, createNoticeJob, markNoticeDelivered } from './src/notices.js';
 import {
   addEvents,
@@ -26,7 +27,8 @@ const APP_ENV = String(process.env.APP_ENV ?? 'development').trim().toLowerCase(
 const EXPECTED_BOT_USER_ID = String(process.env.EXPECTED_BOT_USER_ID ?? '').trim();
 const ENV_LANGUAGE_INPUT = String(process.env.BOT_LANGUAGE ?? 'en').trim().toLowerCase();
 const ENV_LANGUAGE = hasLocale(ENV_LANGUAGE_INPUT) ? ENV_LANGUAGE_INPUT : 'en';
-const ENV_DEFAULT_TIME_ZONE = process.env.EVENT_DEFAULT_TIME_ZONE || 'Europe/Moscow';
+const ENV_DEFAULT_TIME_ZONE_INPUT = process.env.EVENT_DEFAULT_TIME_ZONE || 'Europe/Moscow';
+const ENV_DEFAULT_TIME_ZONE = normalizeFixedOffsetTimeZone(ENV_DEFAULT_TIME_ZONE_INPUT) ?? ENV_DEFAULT_TIME_ZONE_INPUT;
 const DEFAULT_EVENT_DURATION_MINUTES = 180;
 const REMINDERS = [
   { minutes: 24 * 60, key: 'reminder24', id: '24h' },
@@ -100,11 +102,11 @@ function resolveTimeZone(raw, guildId) {
   if (['default', 'по умолчанию', 'дефолт', 'server', 'сервер'].includes(lowered)) {
     return configForGuild(guildId).defaultTimeZone;
   }
-  return TZ_ALIASES.get(lowered) ?? input;
+  return normalizeFixedOffsetTimeZone(input) ?? TZ_ALIASES.get(lowered) ?? input;
 }
 
 function validTimeZone(zone) {
-  return zone === 'UTC' || zone === 'Etc/UTC' || IANAZone.isValidZone(zone);
+  return isSupportedTimeZone(zone);
 }
 
 function hasOffsetInTimeZone(zone, instant) {
@@ -885,56 +887,67 @@ async function createEventSeries(message, rawArguments) {
   const guildId = message.guildId;
   const raw = rawArguments.trim().replace(/^\|/, '').trim();
   const fields = raw.split('|').map((field) => field.trim());
-  if (fields.length < 6) {
-    await privateResponse(message, t('createUsage', {}, guildId));
+  if (fields.length < 6 || fields.length > 8) {
+    await replyCreateError(message, t('createUsage', {}, guildId));
     return;
   }
 
-  const [title, dateInput, rawTimeZone, maxInput, descriptionInput, repeatInput, durationInput] = fields;
+  const [title, dateInput, rawTimeZone, maxInput, descriptionInput, repeatInput] = fields;
+  let durationInput = fields[6];
+  let notifyStartInput = fields[7];
+  // Friendly short form: a final yes/no directly after recurrence means notify-on-start.
+  if (fields.length === 7 && ['yes', 'no', 'да', 'нет', 'true', 'false', 'on', 'off'].includes(String(fields[6] ?? '').toLowerCase())) {
+    notifyStartInput = fields[6];
+    durationInput = '';
+  }
+
   const description = descriptionInput === '-' ? '' : descriptionInput;
   const timeZone = resolveTimeZone(rawTimeZone, guildId);
   const config = configForGuild(guildId);
-  const durationMinutes = durationInput === undefined || durationInput === ''
-    ? config.eventDurationMinutes
-    : Number(durationInput);
-  if (!Number.isInteger(durationMinutes) || durationMinutes < 15 || durationMinutes > 1440) {
-    await privateResponse(message, t('eventDurationInvalid', {}, guildId));
+  const { minutes: durationMinutes, defaulted: durationWasDefaulted } = resolveDurationMinutes(
+    durationInput,
+    config.eventDurationMinutes,
+  );
+  const notifyOnStart = parseOptionalBoolean(notifyStartInput);
+  if (notifyOnStart === null) {
+    await replyCreateError(message, t('createNotifyInvalid', {}, guildId));
     return;
   }
 
   if (!title || title.length > 100) {
-    await privateResponse(message, t('titleInvalid', {}, guildId));
+    await replyCreateError(message, t('titleInvalid', {}, guildId));
     return;
   }
   if (description.length > 700) {
-    await privateResponse(message, t('descriptionInvalid', {}, guildId));
+    await replyCreateError(message, t('descriptionInvalid', {}, guildId));
     return;
   }
   if (!rawTimeZone || !validTimeZone(timeZone)) {
-    await privateResponse(message, t('zoneInvalid', { zone: rawTimeZone }, guildId));
+    await replyCreateError(message, t('zoneInvalid', { zone: rawTimeZone }, guildId));
     return;
   }
-  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(dateInput)) {
-    await privateResponse(message, t('dateInvalid', {}, guildId));
+  const normalizedDateInput = normalizeLocalDateTimeInput(dateInput);
+  if (!normalizedDateInput) {
+    await replyCreateError(message, t('dateInvalid', {}, guildId));
     return;
   }
 
-  const zonedStart = DateTime.fromFormat(dateInput, 'yyyy-MM-dd HH:mm', {
+  const zonedStart = DateTime.fromFormat(normalizedDateInput, 'yyyy-MM-dd HH:mm', {
     zone: timeZone,
     setZone: true,
     locale: localeForGuild(guildId),
     numberingSystem: 'latn',
   });
   if (!zonedStart.isValid) {
-    await privateResponse(message, t('dateInvalid', {}, guildId));
+    await replyCreateError(message, t('dateInvalid', {}, guildId));
     return;
   }
-  if (zonedStart.toFormat('yyyy-MM-dd HH:mm') !== dateInput) {
-    await privateResponse(message, t('nonexistentTime', { zone: timeZone }, guildId));
+  if (zonedStart.toFormat('yyyy-MM-dd HH:mm') !== normalizedDateInput) {
+    await replyCreateError(message, t('nonexistentTime', { zone: timeZone }, guildId));
     return;
   }
   if (zonedStart.toMillis() <= Date.now() + 60_000) {
-    await privateResponse(message, t('timePast', {}, guildId));
+    await replyCreateError(message, t('timePast', {}, guildId));
     return;
   }
 
@@ -942,7 +955,7 @@ async function createEventSeries(message, rawArguments) {
   if (maxInput && !['none', '-', 'без лимита', 'безлимит', 'no limit'].includes(maxInput.toLowerCase())) {
     const parsedLimit = Number(maxInput);
     if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 1000) {
-      await privateResponse(message, t('limitInvalid', {}, guildId));
+      await replyCreateError(message, t('limitInvalid', {}, guildId));
       return;
     }
     maxAttendees = parsedLimit;
@@ -950,7 +963,7 @@ async function createEventSeries(message, rawArguments) {
 
   const recurrence = parseRecurrence(repeatInput);
   if (!recurrence.ok) {
-    await privateResponse(message, t('repeatInvalid', {}, guildId));
+    await replyCreateError(message, t('repeatInvalid', {}, guildId));
     return;
   }
 
@@ -999,6 +1012,7 @@ async function createEventSeries(message, rawArguments) {
       creatorId: message.author.id,
       creatorName: message.author.username ?? 'Unknown host',
       durationMinutes,
+      notifyOnStart,
       status: 'scheduled',
       createdAt: DateTime.utc().toISO({ suppressMilliseconds: true }),
     });
@@ -1017,8 +1031,44 @@ async function createEventSeries(message, rawArguments) {
     ? t('createdMany', { count: recurrence.count, title, id: first.id, when: timeLabel }, guildId)
     : t('createdOne', { title, id: first.id, when: timeLabel }, guildId);
   const manageHint = t('hostManageCommandHint', { id: first.id, command: manageCommandForGuild(guildId) }, guildId);
-  const delivered = await privateResponse(message, `${confirmation}\n\n${t('createNote', {}, guildId)}\n\n${manageHint}`);
+  const durationNote = durationWasDefaulted
+    ? `\n\n${t('createDurationDefaulted', { duration: durationMinutes }, guildId)}`
+    : '';
+  const startNoticeNote = notifyOnStart ? `\n${t('createStartNoticeEnabled', {}, guildId)}` : '';
+  const delivered = await privateResponse(message, `${confirmation}\n\n${t('createNote', {}, guildId)}${durationNote}${startNoticeNote}\n\n${manageHint}`);
   if (delivered) setupSessions.delete(message.author.id);
+}
+
+function parseOptionalBoolean(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (!normalized) return false;
+  if (['yes', 'y', 'true', 'on', 'enable', 'enabled', 'да', 'д'].includes(normalized)) return true;
+  if (['no', 'n', 'false', 'off', 'disable', 'disabled', 'нет', 'н'].includes(normalized)) return false;
+  return null;
+}
+
+async function replyCreateError(message, content) {
+  const originalCommand = String(message.content ?? '');
+  const preservedText = `${t('createCommandPreserved', {}, message.guildId)}\n${originalCommand}`;
+
+  if (!message.guildId) {
+    await safeReply(message, content);
+    await safeReply(message, preservedText);
+    return;
+  }
+
+  try {
+    await message.author.send(content);
+    await message.author.send(preservedText);
+    await tryDeleteCommand(message);
+  } catch (error) {
+    logConsoleStyle('warn', '[Could not DM event creation correction]', error?.message ?? error);
+    try {
+      await safeReply(message, t('dmFailed', {}, message.guildId));
+    } catch (replyError) {
+      logConsoleStyle('error', '[Event creation correction fallback failed]', replyError?.message ?? replyError);
+    }
+  }
 }
 
 function parseRecurrence(input) {
@@ -1327,17 +1377,18 @@ async function handleHostManageInput(message, rawInput) {
   }
 
   if (session.step === 'time') {
-    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(input)) {
+    const normalizedTimeInput = normalizeLocalDateTimeInput(input);
+    if (!normalizedTimeInput) {
       await message.author.send(t('hostManageInvalidTime', { zone: event.timeZone }, event.guildId));
       return;
     }
-    const newLocal = DateTime.fromFormat(input, 'yyyy-MM-dd HH:mm', {
+    const newLocal = DateTime.fromFormat(normalizedTimeInput, 'yyyy-MM-dd HH:mm', {
       zone: event.timeZone,
       setZone: true,
       locale: localeForGuild(event.guildId),
       numberingSystem: 'latn',
     });
-    if (!newLocal.isValid || newLocal.toFormat('yyyy-MM-dd HH:mm') !== input) {
+    if (!newLocal.isValid || newLocal.toFormat('yyyy-MM-dd HH:mm') !== normalizedTimeInput) {
       await message.author.send(t('hostManageInvalidTime', { zone: event.timeZone }, event.guildId));
       return;
     }
@@ -1362,6 +1413,9 @@ async function handleHostManageInput(message, rawInput) {
     event.status = 'scheduled';
     event.remindersSent = [];
     event.reminderDeliveries = {};
+    // A reschedule starts a new lifecycle; discard any undelivered old start notice.
+    event.noticeOutbox = (event.noticeOutbox ?? []).filter((notice) => notice.type !== 'event-start' || notice.status === 'completed');
+    delete event.startNoticeQueuedAt;
     await saveEvents([event]);
     await refreshEventPost(event);
     await notifyInterestedMembers(event, `${t('noticeRescheduled', { title: event.title }, event.guildId)}\n📅 ${timestampTag(event, 'F')} · ${timestampTag(event, 'R')}`);
@@ -1498,6 +1552,38 @@ async function deliverMemberNotice(event, notice) {
   } finally {
     noticeJobsInFlight.delete(jobKey);
   }
+}
+
+async function queueEventStartNotice(event) {
+  if (!shouldQueueEventStartNotice(event)) return false;
+
+  const createdAt = DateTime.utc().toISO({ suppressMilliseconds: true });
+  const recipients = getEventStartNoticeRecipients(event);
+  const notice = createNoticeJob(
+    t('eventStartNotice', { title: event.title, when: timestampTag(event, 'F') }, event.guildId),
+    recipients,
+    createdAt,
+  );
+  notice.type = 'event-start';
+
+  const previousOutbox = Array.isArray(event.noticeOutbox) ? [...event.noticeOutbox] : undefined;
+  const previousQueuedAt = event.startNoticeQueuedAt;
+  event.noticeOutbox = compactNoticeOutbox([...(event.noticeOutbox ?? []), notice], 10);
+  event.startNoticeQueuedAt = createdAt;
+  completeNoticeIfDelivered(notice, createdAt);
+
+  try {
+    await saveEvents([event]);
+  } catch (error) {
+    if (previousOutbox) event.noticeOutbox = previousOutbox;
+    else delete event.noticeOutbox;
+    if (previousQueuedAt === undefined) delete event.startNoticeQueuedAt;
+    else event.startNoticeQueuedAt = previousQueuedAt;
+    throw error;
+  }
+
+  log.info('Queued event-start notification', { eventId: event.id, recipientCount: recipients.length });
+  return true;
 }
 
 async function retryPendingMemberNotices() {
@@ -1680,6 +1766,11 @@ async function advanceEvents() {
   if (changed.length) {
     await saveEvents(changed);
     for (const event of changed) await refreshEventPost(event);
+  }
+
+  // Also catches a restart between persisting the status transition and queueing its notice.
+  for (const event of allEvents()) {
+    if (shouldQueueEventStartNotice(event)) await queueEventStartNotice(event);
   }
 
   const seriesIds = new Set(allEvents().map((event) => event.seriesId).filter(Boolean));

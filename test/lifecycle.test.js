@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getReminderWindow, hasActivePublishedOccurrence } from '../src/lifecycle.js';
+import {
+  getEventStartNoticeRecipients,
+  getReminderWindow,
+  hasActivePublishedOccurrence,
+  shouldQueueEventStartNotice,
+} from '../src/lifecycle.js';
 
 test('an in-progress published event blocks the next occurrence in its series', () => {
   assert.equal(hasActivePublishedOccurrence([
@@ -40,4 +45,31 @@ test('reminders are not sent before their due time', () => {
   const now = 10_000_000;
   const startsAt = now + 10 * 60_000;
   assert.equal(getReminderWindow(now, startsAt, 5, 15), 'not-due');
+});
+
+
+test('start notices are opt-in and queued only once while an event is in progress', () => {
+  assert.equal(shouldQueueEventStartNotice({ status: 'in_progress' }), false);
+  assert.equal(shouldQueueEventStartNotice({ status: 'scheduled', notifyOnStart: true }), false);
+  assert.equal(shouldQueueEventStartNotice({ status: 'completed', notifyOnStart: true }), false);
+  assert.equal(shouldQueueEventStartNotice({ status: 'in_progress', notifyOnStart: false }), false);
+  assert.equal(shouldQueueEventStartNotice({ status: 'in_progress', notifyOnStart: true }), true);
+  assert.equal(shouldQueueEventStartNotice({
+    status: 'in_progress',
+    notifyOnStart: true,
+    startNoticeQueuedAt: '2026-12-05T10:00:00Z',
+  }), false);
+});
+
+test('start notice recipients include host and unique yes/maybe attendees only', () => {
+  assert.deepEqual(getEventStartNoticeRecipients({
+    creatorId: 'host',
+    attendees: [
+      { userId: 'host', status: 'yes' },
+      { userId: 'yes-user', status: 'yes' },
+      { userId: 'maybe-user', status: 'maybe' },
+      { userId: 'no-user', status: 'no' },
+      { userId: 'maybe-user', status: 'maybe' },
+    ],
+  }), ['host', 'yes-user', 'maybe-user']);
 });

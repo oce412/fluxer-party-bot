@@ -1,0 +1,31 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - master
+      - "feature/**"
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check syntax and translations
+        run: npm run check
+      - name: Run automated tests
+        run: npm test
