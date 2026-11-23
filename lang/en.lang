@@ -169,7 +169,6 @@ cardMaybeCount={count} maybe
 cardRsvpHint=✅ Attending · 🤔 Maybe · ❌ Remove RSVP
 
 languageCredits=**Localization contributors**\nEnglish (en): oce412 — initial locale file maintainer.\nRussian (ru): oce412 — initial locale file maintainer.\nCredits are opt-in. To request a credit, include your preferred display name and language in your translation contribution.
-languageCreditsUsage=Use `!event language credits` to see localization contributors.
 upcomingEmbedTitle=Upcoming events
 embedWhen=📅 Starts
 embedAttendees=👥 Attending
