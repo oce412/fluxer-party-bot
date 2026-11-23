@@ -1633,42 +1633,32 @@ async function listEvents(message, guildId = message.guildId) {
     return;
   }
 
-  const guild = getCollectionItem(client.guilds, guildId) ?? getCollectionItem(client.guilds?.cache, guildId);
+  const guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
   const channel = configForGuild(guildId).announcementChannelId;
-  const header = t('dmEventLocation', {
-    guild: guild?.name ?? guildId,
-    channel: channel ? '<#' + channel + '>' : t('dmUnknownChannel', {}, guildId),
-  }, guildId);
-  const lines = upcoming.map((event) => {
-    const attendees = getEventAttendees(event);
-    const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
-    const rawLimit = Number(event.maxAttendees);
-    const hasLimit = Number.isInteger(rawLimit) && rawLimit > 0;
-    const spots = hasLimit
-      ? yesCount + '/' + rawLimit
-      : yesCount + ' · ' + (langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit');
-    let when = String(event.startsAt);
-    try {
-      when = formatPersonalTime(event, message.author.id).replaceAll('\n', ' · ');
-    } catch (error) {
-      logConsoleStyle('warn', '[Event list time formatting failed for ' + String(event.id ?? 'unknown') + ']', error?.message ?? error);
-    }
-    return t('upcomingLine', {
-      title: String(event.title ?? 'Untitled event').slice(0, 100),
-      id: String(event.id ?? 'unknown'),
-      when,
-      spots,
-    }, guildId);
+  const embed = buildUpcomingEventsEmbed(upcoming, {
+    communityName: guild?.name ?? guildId,
+    channelMention: channel ? '<#' + channel + '>' : t('dmUnknownChannel', {}, guildId),
+    formatWhen: (event) => formatPersonalTime(event, message.author.id).replaceAll('\n', ' · '),
+    noLimitLabel: t('cardNoLimit', {}, guildId),
+    maybeLabel: t('embedMaybe', {}, guildId),
+    labels: {
+      title: t('upcomingEmbedTitle', {}, guildId),
+      community: t('dmCommunityLabel', {}, guildId),
+      announcements: t('dmChannelLabel', {}, guildId),
+    },
+    footer: t('embedListFooter', {}, guildId),
   });
-  await privateResponse(message, header + '\n\n' + t('upcomingTitle', {}, guildId) + '\n' + lines.join('\n') + '\n\n' + t('upcomingFooter', {}, guildId));
+  await privateEmbedResponse(message, embed);
 }
+
 async function showEventInfo(message, idInput, guildId = message.guildId) {
   const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
     await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
-  await privateResponse(message, renderEventDetails(event, message.author.id));
+  await privateEmbedResponse(message, renderEventDetails(event, message.author.id));
 }
 
 async function commandRsvp(message, rawArguments, guildId = message.guildId) {
@@ -2233,30 +2223,40 @@ function escapeMarkdownInline(value) {
 
 function renderEventDetails(event, userId) {
   const guildId = event.guildId;
-  const yes = event.attendees.filter((attendee) => attendee.status === 'yes');
-  const maybe = event.attendees.filter((attendee) => attendee.status === 'maybe');
-  const state = event.status === 'cancelled' ? t('cancelledTag', {}, guildId)
-    : event.status === 'in_progress' ? t('inProgressTag', {}, guildId)
-      : event.status === 'completed' ? t('completedTag', {}, guildId) : null;
-  const guild = client.guilds.get(guildId);
-  const lines = [
-    `🎉 **${event.title}**${state ? ` · ${state}` : ''}`,
-    `🏠 **${t('dmCommunityLabel', {}, guildId)}:** ${guild?.name ?? guildId}`,
-    `📣 **${t('dmChannelLabel', {}, guildId)}:** <#${event.channelId}>`,
-    `🆔 **ID:** \`${event.id}\``,
-    formatPersonalTime(event, userId),
-    `👤 ${t('host', {}, guildId)}: ${event.creatorName}`,
-    `👥 ${t('spots', {}, guildId)}: ${event.maxAttendees === null ? `${yes.length} · ${langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit'}` : `${yes.length}/${event.maxAttendees}`}`,
-    `✅ ${t('attending', {}, guildId)} (${yes.length}): ${yes.length ? yes.map((a) => a.username).slice(0, 30).join(', ') : t('noConfirmed', {}, guildId)}`,
-    `🤔 ${t('maybe', {}, guildId)} (${maybe.length}): ${maybe.length ? maybe.map((a) => a.username).slice(0, 20).join(', ') : '—'}`,
-  ];
-  if (event.description) lines.push(`📝 ${t('details', {}, guildId)}: ${event.description}`);
-  if (event.status === 'scheduled' && !isEventStarted(event)) {
-    lines.push('', langForGuild(guildId) === 'ru'
-      ? `RSVP: \`!событие rsvp ${event.id} да|возможно|нет\``
-      : `RSVP: \`!event rsvp ${event.id} yes|maybe|no\``);
-  }
-  return lines.join('\n');
+  const guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  const statusKey = {
+    scheduled: 'scheduledTag',
+    cancelled: 'cancelledTag',
+    in_progress: 'inProgressTag',
+    completed: 'completedTag',
+    skipped: 'skippedTag',
+  }[event.status];
+  const statusValue = statusKey ? t(statusKey, {}, guildId) : String(event.status ?? '—');
+  const rsvpCommand = langForGuild(guildId) === 'ru'
+    ? `!событие rsvp ${event.id} да|возможно|нет`
+    : `!event rsvp ${event.id} yes|maybe|no`;
+  return buildEventDetailsEmbed(event, {
+    communityName: guild?.name ?? guildId,
+    channelMention: `<#${event.channelId}>`,
+    when: formatPersonalTime(event, userId),
+    duration: formatDuration(event.durationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES, guildId),
+    noLimitLabel: t('cardNoLimit', {}, guildId),
+    maybeLabel: t('embedMaybe', {}, guildId),
+    labels: {
+      community: t('dmCommunityLabel', {}, guildId),
+      announcements: t('dmChannelLabel', {}, guildId),
+      when: t('embedWhen', {}, guildId),
+      host: t('host', {}, guildId),
+      attendees: t('embedAttendees', {}, guildId),
+      duration: t('embedDuration', {}, guildId),
+      attendingNames: t('embedAttendingNames', {}, guildId),
+      maybeNames: t('embedMaybeNames', {}, guildId),
+      status: t('embedStatus', {}, guildId),
+      statusValue,
+    },
+    footer: t('embedInfoFooter', { id: event.id, command: rsvpCommand }, guildId),
+  });
 }
 
 function findGuildEvent(idInput, guildId) {
