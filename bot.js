@@ -302,6 +302,7 @@ client.on(Events.MessageCreate, async (message) => {
         && !startsOrRestartsWizard
         && !(command === 'cancel' && !tail)) {
         eventCreateSessions.delete(message.author.id);
+        clearDmGuildContext(dmGuildContexts, message.author.id);
         await message.author.send(t('createWizardCancelled', {}, null));
       }
       if (command === 'language') {
@@ -312,19 +313,20 @@ client.on(Events.MessageCreate, async (message) => {
         await selectDmGuild(message, null, null, tail);
       } else if (command === 'cancel' && !tail && eventCreateSessions.has(message.author.id)) {
         eventCreateSessions.delete(message.author.id);
+        clearDmGuildContext(dmGuildContexts, message.author.id);
         await message.author.send(t('createWizardCancelled', {}, null));
       } else if (command === 'manage') {
-        const selectedGuildId = dmGuildSelections.get(message.author.id);
-        if (selectedGuildId) await dispatchDmEventCommand(message, command, tail, selectedGuildId);
-        else await startEventManagement(message, tail);
+        await selectDmGuild(message, command, tail);
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && hostManageSessions.has(message.author.id)) {
         hostManageSessions.delete(message.author.id);
         await message.author.send(t('hostManageClosed', {}, null));
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && setupSessions.has(message.author.id)) {
         setupSessions.delete(message.author.id);
         await message.author.send(t('setupWizardCancelled', {}, null));
-      } else if (['create', 'list', 'info', 'rsvp', 'cancel', 'zones', 'myzone'].includes(command)) {
+      } else if (['create', 'list', 'info', 'rsvp', 'cancel', 'myzone'].includes(command)) {
         await selectDmGuild(message, command, tail);
+      } else if (command === 'zones') {
+        await privateResponse(message, t('zones', {}, null));
       } else if (command === 'help') {
         await privateResponse(message, t('dmHelp', {}, null));
       } else {
@@ -1146,6 +1148,7 @@ async function startEventCreationWizard(message, guildId) {
   setupSessions.delete(message.author.id);
   hostManageSessions.delete(message.author.id);
   dmGuildSelectionSessions.delete(message.author.id);
+  setDmGuildContext(dmGuildContexts, message.author.id, guildId, { pinned: true });
 
   const session = {
     guildId,
@@ -1172,6 +1175,7 @@ async function startEventCreationWizard(message, guildId) {
     if (message.guildId) await tryDeleteCommand(message);
   } catch (error) {
     eventCreateSessions.delete(message.author.id);
+    clearDmGuildContext(dmGuildContexts, message.author.id);
     logConsoleStyle('warn', '[Event creation wizard DM failed]', error?.message ?? error);
     if (message.guildId) {
       await privateResponse(message, t('dmFailed', {}, guildId), { deleteCommand: false });
@@ -1239,13 +1243,14 @@ async function handleEventCreateWizardAnswer(message, rawInput) {
 
   if (session.expiresAt <= Date.now()) {
     eventCreateSessions.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
     await message.author.send(t('createWizardExpired', {}, session.guildId));
     return;
   }
 
   if (!(await isUserMemberInGuild(session.guildId, userId))) {
     eventCreateSessions.delete(userId);
-    dmGuildSelections.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
     await message.author.send(t('dmServerNotMember', { guild: session.guildId }, null));
     return;
   }
@@ -1257,6 +1262,7 @@ async function handleEventCreateWizardAnswer(message, rawInput) {
 
   if (['cancel', 'отмена', 'стоп', 'stop'].includes(normalized)) {
     eventCreateSessions.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
     await message.author.send(t('createWizardCancelled', {}, guildId));
     return;
   }
@@ -1363,21 +1369,26 @@ async function handleEventCreateWizardAnswer(message, rawInput) {
         return;
       }
       eventCreateSessions.delete(userId);
-      await publishEventSeries(message, guildId, {
-        title: session.values.title,
-        description: session.values.description,
-        zonedStart,
-        timeZone: session.values.timeZone,
-        maxAttendees: session.values.maxAttendees,
-        recurrence: session.values.recurrence,
-        durationMinutes: session.values.durationMinutes,
-        durationWasDefaulted: session.values.durationWasDefaulted,
-        notifyOnStart: session.values.notifyOnStart,
-      });
+      try {
+        await publishEventSeries(message, guildId, {
+          title: session.values.title,
+          description: session.values.description,
+          zonedStart,
+          timeZone: session.values.timeZone,
+          maxAttendees: session.values.maxAttendees,
+          recurrence: session.values.recurrence,
+          durationMinutes: session.values.durationMinutes,
+          durationWasDefaulted: session.values.durationWasDefaulted,
+          notifyOnStart: session.values.notifyOnStart,
+        });
+      } finally {
+        clearDmGuildContext(dmGuildContexts, userId);
+      }
       return;
     }
     if (['no', 'n', 'нет', 'abort', 'отменить'].includes(normalized)) {
       eventCreateSessions.delete(userId);
+      clearDmGuildContext(dmGuildContexts, userId);
       await message.author.send(t('createWizardCancelled', {}, guildId));
       return;
     }
