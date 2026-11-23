@@ -1,5 +1,6 @@
 import { Client, Events, PermissionFlags } from '@fluxerjs/core';
 import { canManageEvent, findGuildScopedEvent } from './src/authz.js';
+import { resolveGuildSelection } from './src/dm-context.js';
 import { startHealthServer } from './src/health.js';
 import { isGatewayConnectionHealthy } from './src/gateway-health.js';
 import { log, logConsoleStyle } from './src/logger.js';
@@ -203,7 +204,10 @@ let schedulerBusy = false;
 const publishingEventIds = new Set();
 const setupSessions = new Map();
 const hostManageSessions = new Map();
+const dmGuildSelections = new Map();
+const dmGuildSelectionSessions = new Map();
 const SETUP_SESSION_TTL_MS = 30 * 60 * 1000;
+const MAX_DM_GUILD_OPTIONS = 20;
 const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration'];
 
 client.on(Events.Error, (error) => {
@@ -258,6 +262,10 @@ client.on(Events.MessageCreate, async (message) => {
         await handleSetupWizardAnswer(message, text);
         return;
       }
+      if (dmGuildSelectionSessions.has(message.author.id)) {
+        await handleDmGuildSelectionInput(message, text);
+        return;
+      }
     }
     if (!rootMatch) return;
 
@@ -271,6 +279,8 @@ client.on(Events.MessageCreate, async (message) => {
       ['язык', 'language'], ['языки', 'language'], ['перевод', 'language'], ['переводы', 'language'], ['languages', 'language'], ['lang', 'language'], ['translate', 'language'],
       ['моязона', 'myzone'], ['мойпояс', 'myzone'], ['личныйпояс', 'myzone'], ['зона', 'myzone'],
       ['записаться', 'rsvp'], ['статус', 'rsvp'], ['управление', 'manage'], ['меню', 'manage'],
+      ['server', 'server'], ['servers', 'server'], ['community', 'server'], ['communities', 'server'],
+      ['сервер', 'server'], ['сообщество', 'server'], ['сообщества', 'server'],
     ]);
     const command = aliases.get(rawCommand) ?? rawCommand;
 
@@ -279,16 +289,22 @@ client.on(Events.MessageCreate, async (message) => {
         await languageSupportCommand(message, tail, null);
       } else if (command === 'setup') {
         await setupCommand(message, tail);
+      } else if (command === 'server') {
+        await selectDmGuild(message, null, null, tail);
       } else if (command === 'manage') {
-        await startEventManagement(message, tail);
+        await dispatchDmEventCommand(message, command, tail, null);
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && hostManageSessions.has(message.author.id)) {
         hostManageSessions.delete(message.author.id);
         await message.author.send(t('hostManageClosed', {}, null));
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && setupSessions.has(message.author.id)) {
         setupSessions.delete(message.author.id);
         await message.author.send(t('setupWizardCancelled', {}, null));
+      } else if (['create', 'list', 'info', 'rsvp', 'cancel', 'zones', 'myzone'].includes(command)) {
+        await selectDmGuild(message, command, tail);
+      } else if (command === 'help') {
+        await privateResponse(message, t('dmHelp', {}, null));
       } else {
-        await privateResponse(message, t('serverOnly'));
+        await privateResponse(message, t('dmServerUsage', {}, null));
       }
       return;
     }
@@ -301,16 +317,16 @@ client.on(Events.MessageCreate, async (message) => {
         await createEventSeries(message, tail);
         break;
       case 'list':
-        await listEvents(message);
+        await listEvents(message, message.guildId);
         break;
       case 'info':
-        await showEventInfo(message, tail);
+        await showEventInfo(message, tail, message.guildId);
         break;
       case 'rsvp':
-        await commandRsvp(message, tail);
+        await commandRsvp(message, tail, message.guildId);
         break;
       case 'cancel':
-        await cancelEvent(message, tail);
+        await cancelEvent(message, tail, message.guildId);
         break;
       case 'manage':
         await startEventManagement(message, tail);
@@ -428,6 +444,171 @@ async function privateResponse(message, content, { deleteCommand = true } = {}) 
       logConsoleStyle('error', '[DM fallback failed]', replyError?.message ?? replyError);
     }
     return false;
+  }
+}
+
+async function isUserMemberInGuild(guildId, userId) {
+  let guild = client.guilds.get(guildId);
+  if (!guild) guild = await client.guilds.fetch(guildId).catch(() => null);
+  if (!guild) return false;
+  if (guild.ownerId === userId || guild.owner_id === userId) return true;
+
+  let member = guild.members?.get(userId);
+  if (!member && typeof guild.fetchMember === 'function') {
+    member = await guild.fetchMember(userId).catch(() => null);
+  }
+  if (!member && guild.members?.resolve) {
+    member = await guild.members.resolve(userId).catch?.(() => null) ?? guild.members.resolve(userId);
+  }
+  return Boolean(member);
+}
+
+async function findMemberGuilds(userId) {
+  const candidates = collectionValues(client.guilds).filter((guild) => guild?.id && guild.available !== false);
+  const accessible = [];
+  for (const candidate of candidates) {
+    try {
+      if (await isUserMemberInGuild(candidate.id, userId)) {
+        accessible.push({ id: String(candidate.id), name: String(candidate.name ?? 'Unnamed server') });
+      }
+    } catch (error) {
+      logConsoleStyle('warn', `[DM server membership check failed for ${candidate.id}]`, error?.message ?? error);
+    }
+  }
+  return accessible.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function selectDmGuild(message, pendingCommand = null, pendingArguments = '', requestedInput = '') {
+  const userId = message.author.id;
+  const accessible = await findMemberGuilds(userId);
+  if (!accessible.length) {
+    dmGuildSelectionSessions.delete(userId);
+    await message.author.send(t('dmNoServers', {}, null));
+    return;
+  }
+
+  const input = String(requestedInput ?? '').trim();
+  if (input) {
+    const resolved = resolveGuildSelection(input, accessible);
+    if (!resolved.ok) {
+      await message.author.send(t(resolved.reason === 'ambiguous' ? 'dmServerAmbiguous' : 'dmServerSelectionInvalid', {
+        options: formatDmGuildOptions(accessible),
+      }, null));
+      return;
+    }
+    dmGuildSelections.set(userId, resolved.guild.id);
+    dmGuildSelectionSessions.delete(userId);
+    await message.author.send(t('dmServerSelected', { guild: resolved.guild.name }, resolved.guild.id));
+    if (pendingCommand) await dispatchDmEventCommand(message, pendingCommand, pendingArguments, resolved.guild.id);
+    return;
+  }
+
+  if (accessible.length === 1) {
+    dmGuildSelections.set(userId, accessible[0].id);
+    dmGuildSelectionSessions.delete(userId);
+    if (pendingCommand) {
+      await dispatchDmEventCommand(message, pendingCommand, pendingArguments, accessible[0].id);
+    } else {
+      await message.author.send(t('dmServerSelected', { guild: accessible[0].name }, accessible[0].id));
+    }
+    return;
+  }
+
+  dmGuildSelectionSessions.set(userId, {
+    guilds: accessible,
+    pendingCommand,
+    pendingArguments,
+    expiresAt: Date.now() + SETUP_SESSION_TTL_MS,
+  });
+  await message.author.send(t('dmServerPrompt', {
+    options: formatDmGuildOptions(accessible),
+    current: dmGuildSelections.has(userId)
+      ? (accessible.find((guild) => guild.id === dmGuildSelections.get(userId))?.name ?? t('dmNoCurrentServer', {}, null))
+      : t('dmNoCurrentServer', {}, null),
+  }, null));
+}
+
+function formatDmGuildOptions(guilds) {
+  const visible = guilds.slice(0, MAX_DM_GUILD_OPTIONS);
+  const lines = visible.map((guild, index) => `${index + 1}. **${guild.name}**`).join('\n');
+  const more = guilds.length > visible.length ? `\n${t('dmServerPromptMore', { count: guilds.length }, null)}` : '';
+  return `${lines}${more}`;
+}
+
+async function handleDmGuildSelectionInput(message, rawInput) {
+  const session = dmGuildSelectionSessions.get(message.author.id);
+  if (!session) return;
+  if (session.expiresAt <= Date.now()) {
+    dmGuildSelectionSessions.delete(message.author.id);
+    await message.author.send(t('dmServerSelectionExpired', {}, null));
+    return;
+  }
+  const input = String(rawInput ?? '').trim();
+  if (['cancel', 'отмена', 'стоп'].includes(input.toLowerCase())) {
+    dmGuildSelectionSessions.delete(message.author.id);
+    await message.author.send(t('dmServerSelectionCancelled', {}, null));
+    return;
+  }
+  const resolved = resolveGuildSelection(input, session.guilds);
+  if (!resolved.ok) {
+    await message.author.send(t(resolved.reason === 'ambiguous' ? 'dmServerAmbiguous' : 'dmServerSelectionInvalid', {
+      options: formatDmGuildOptions(session.guilds),
+    }, null));
+    return;
+  }
+
+  if (!(await isUserMemberInGuild(resolved.guild.id, message.author.id))) {
+    dmGuildSelectionSessions.delete(message.author.id);
+    await message.author.send(t('dmServerNotMember', { guild: resolved.guild.name }, null));
+    return;
+  }
+
+  dmGuildSelections.set(message.author.id, resolved.guild.id);
+  dmGuildSelectionSessions.delete(message.author.id);
+  await message.author.send(t('dmServerSelected', { guild: resolved.guild.name }, resolved.guild.id));
+  if (session.pendingCommand) {
+    await dispatchDmEventCommand(message, session.pendingCommand, session.pendingArguments, resolved.guild.id);
+  }
+}
+
+async function dispatchDmEventCommand(message, command, rawArguments, guildId) {
+  if (!(await isUserMemberInGuild(guildId, message.author.id))) {
+    dmGuildSelections.delete(message.author.id);
+    await message.author.send(t('dmServerNotMember', { guild: guildId }, null));
+    return;
+  }
+
+  switch (command) {
+    case 'create':
+      if (!rawArguments.trim()) {
+        await message.author.send(t('createUsage', {}, guildId));
+      } else {
+        await createEventSeries(message, rawArguments, guildId);
+      }
+      break;
+    case 'list':
+      await listEvents(message, guildId);
+      break;
+    case 'info':
+      await showEventInfo(message, rawArguments, guildId);
+      break;
+    case 'rsvp':
+      await commandRsvp(message, rawArguments, guildId);
+      break;
+    case 'cancel':
+      await cancelEvent(message, rawArguments, guildId);
+      break;
+    case 'manage':
+      await startEventManagement(message, rawArguments, guildId);
+      break;
+    case 'zones':
+      await privateResponse(message, t('zones', {}, guildId));
+      break;
+    case 'myzone':
+      await myZoneCommand(message, rawArguments, guildId);
+      break;
+    default:
+      await message.author.send(t('dmServerUsage', {}, guildId));
   }
 }
 
@@ -821,8 +1002,7 @@ async function isServerAdmin(message) {
   }
 }
 
-async function myZoneCommand(message, rawZone) {
-  const guildId = message.guildId;
+async function myZoneCommand(message, rawZone, guildId = message.guildId) {
   const input = rawZone.trim();
   const current = getUserTimeZone(guildId, message.author.id);
   if (!input) {
@@ -883,12 +1063,11 @@ function safeConfiguredFormUrl(rawValue) {
   }
 }
 
-async function createEventSeries(message, rawArguments) {
-  const guildId = message.guildId;
+async function createEventSeries(message, rawArguments, guildId = message.guildId) {
   const raw = rawArguments.trim().replace(/^\|/, '').trim();
   const fields = raw.split('|').map((field) => field.trim());
   if (fields.length < 6 || fields.length > 8) {
-    await replyCreateError(message, t('createUsage', {}, guildId));
+    await replyCreateError(message, t('createUsage', {}, guildId), guildId);
     return;
   }
 
@@ -910,25 +1089,25 @@ async function createEventSeries(message, rawArguments) {
   );
   const notifyOnStart = parseOptionalBoolean(notifyStartInput);
   if (notifyOnStart === null) {
-    await replyCreateError(message, t('createNotifyInvalid', {}, guildId));
+    await replyCreateError(message, t('createNotifyInvalid', {}, guildId), guildId);
     return;
   }
 
   if (!title || title.length > 100) {
-    await replyCreateError(message, t('titleInvalid', {}, guildId));
+    await replyCreateError(message, t('titleInvalid', {}, guildId), guildId);
     return;
   }
   if (description.length > 700) {
-    await replyCreateError(message, t('descriptionInvalid', {}, guildId));
+    await replyCreateError(message, t('descriptionInvalid', {}, guildId), guildId);
     return;
   }
   if (!rawTimeZone || !validTimeZone(timeZone)) {
-    await replyCreateError(message, t('zoneInvalid', { zone: rawTimeZone }, guildId));
+    await replyCreateError(message, t('zoneInvalid', { zone: rawTimeZone }, guildId), guildId);
     return;
   }
   const normalizedDateInput = normalizeLocalDateTimeInput(dateInput);
   if (!normalizedDateInput) {
-    await replyCreateError(message, t('dateInvalid', {}, guildId));
+    await replyCreateError(message, t('dateInvalid', {}, guildId), guildId);
     return;
   }
 
@@ -939,15 +1118,15 @@ async function createEventSeries(message, rawArguments) {
     numberingSystem: 'latn',
   });
   if (!zonedStart.isValid) {
-    await replyCreateError(message, t('dateInvalid', {}, guildId));
+    await replyCreateError(message, t('dateInvalid', {}, guildId), guildId);
     return;
   }
   if (zonedStart.toFormat('yyyy-MM-dd HH:mm') !== normalizedDateInput) {
-    await replyCreateError(message, t('nonexistentTime', { zone: timeZone }, guildId));
+    await replyCreateError(message, t('nonexistentTime', { zone: timeZone }, guildId), guildId);
     return;
   }
   if (zonedStart.toMillis() <= Date.now() + 60_000) {
-    await replyCreateError(message, t('timePast', {}, guildId));
+    await replyCreateError(message, t('timePast', {}, guildId), guildId);
     return;
   }
 
@@ -955,7 +1134,7 @@ async function createEventSeries(message, rawArguments) {
   if (maxInput && !['none', '-', 'без лимита', 'безлимит', 'no limit'].includes(maxInput.toLowerCase())) {
     const parsedLimit = Number(maxInput);
     if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 1000) {
-      await replyCreateError(message, t('limitInvalid', {}, guildId));
+      await replyCreateError(message, t('limitInvalid', {}, guildId), guildId);
       return;
     }
     maxAttendees = parsedLimit;
@@ -963,7 +1142,7 @@ async function createEventSeries(message, rawArguments) {
 
   const recurrence = parseRecurrence(repeatInput);
   if (!recurrence.ok) {
-    await replyCreateError(message, t('repeatInvalid', {}, guildId));
+    await replyCreateError(message, t('repeatInvalid', {}, guildId), guildId);
     return;
   }
 
@@ -1047,9 +1226,9 @@ function parseOptionalBoolean(value) {
   return null;
 }
 
-async function replyCreateError(message, content) {
+async function replyCreateError(message, content, guildId = message.guildId) {
   const originalCommand = String(message.content ?? '');
-  const preservedText = `${t('createCommandPreserved', {}, message.guildId)}\n${originalCommand}`;
+  const preservedText = `${t('createCommandPreserved', {}, guildId)}\n${originalCommand}`;
 
   if (!message.guildId) {
     await safeReply(message, content);
@@ -1087,10 +1266,10 @@ function parseRecurrence(input) {
   return { ok: true, frequency, count };
 }
 
-async function listEvents(message) {
+async function listEvents(message, guildId = message.guildId) {
   const now = DateTime.utc().toMillis();
   const upcoming = allEvents()
-    .filter((event) => event.guildId === message.guildId
+    .filter((event) => String(event.guildId) === String(guildId)
       && event.status === 'scheduled'
       && event.messageId
       && DateTime.fromISO(event.startsAt, { zone: 'utc' }).toMillis() > now)
@@ -1098,28 +1277,34 @@ async function listEvents(message) {
     .slice(0, 12);
 
   if (upcoming.length === 0) {
-    await privateResponse(message, t('noUpcoming', {}, message.guildId));
+    await privateResponse(message, t('noUpcoming', {}, guildId));
     return;
   }
 
+  const guild = client.guilds.get(guildId);
+  const channel = configForGuild(guildId).announcementChannelId;
+  const header = t('dmEventLocation', {
+    guild: guild?.name ?? guildId,
+    channel: channel ? `<#${channel}>` : t('dmUnknownChannel', {}, guildId),
+  }, guildId);
   const lines = upcoming.map((event) => {
     const yesCount = event.attendees.filter((attendee) => attendee.status === 'yes').length;
-    const spots = event.maxAttendees === null ? `${yesCount} · ${langForGuild(message.guildId) === 'ru' ? 'без лимита' : 'no limit'}` : `${yesCount}/${event.maxAttendees}`;
-    return t('upcomingLine', { title: event.title, id: event.id, when: formatPersonalTime(event, message.author.id).replaceAll('\n', ' · '), spots }, message.guildId);
+    const spots = event.maxAttendees === null ? `${yesCount} · ${langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit'}` : `${yesCount}/${event.maxAttendees}`;
+    return t('upcomingLine', { title: event.title, id: event.id, when: formatPersonalTime(event, message.author.id).replaceAll('\n', ' · '), spots }, guildId);
   });
-  await privateResponse(message, `${t('upcomingTitle', {}, message.guildId)}\n${lines.join('\n')}\n\n${t('upcomingFooter', {}, message.guildId)}`);
+  await privateResponse(message, `${header}\n\n${t('upcomingTitle', {}, guildId)}\n${lines.join('\n')}\n\n${t('upcomingFooter', {}, guildId)}`);
 }
 
-async function showEventInfo(message, idInput) {
-  const event = findGuildEvent(idInput, message.guildId);
+async function showEventInfo(message, idInput, guildId = message.guildId) {
+  const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
-    await privateResponse(message, t('noEvent', {}, message.guildId));
+    await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
   await privateResponse(message, renderEventDetails(event, message.author.id));
 }
 
-async function commandRsvp(message, rawArguments) {
+async function commandRsvp(message, rawArguments, guildId = message.guildId) {
   const [idInput, statusInput] = rawArguments.split(/\s+/).filter(Boolean);
   const statusMap = new Map([
     ['yes', 'yes'], ['да', 'yes'], ['иду', 'yes'],
@@ -1128,17 +1313,17 @@ async function commandRsvp(message, rawArguments) {
   ]);
   const status = statusMap.get((statusInput ?? '').toLowerCase());
   if (!idInput || !status) {
-    await privateResponse(message, t('rsvpUsage', {}, message.guildId));
+    await privateResponse(message, t('rsvpUsage', {}, guildId));
     return;
   }
 
-  const event = findGuildEvent(idInput, message.guildId);
+  const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
-    await privateResponse(message, t('noEvent', {}, message.guildId));
+    await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
   if (event.status !== 'scheduled' || isEventStarted(event)) {
-    await privateResponse(message, t('rsvpClosed', {}, message.guildId));
+    await privateResponse(message, t('rsvpClosed', {}, guildId));
     return;
   }
 
@@ -1156,15 +1341,15 @@ async function commandRsvp(message, rawArguments) {
   await privateResponse(message, personalizedConfirmation);
 }
 
-async function cancelEvent(message, idInput) {
-  const event = findGuildEvent(idInput, message.guildId);
+async function cancelEvent(message, idInput, guildId = message.guildId) {
+  const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
-    await privateResponse(message, t('noEvent', {}, message.guildId));
+    await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
-  const requesterIsAdmin = event.creatorId !== message.author.id && await isServerAdmin(message);
-  if (!canManageEvent(event, { userId: message.author.id, guildId: message.guildId, isAdmin: requesterIsAdmin })) {
-    await privateResponse(message, t('onlyCreator', {}, message.guildId));
+  const requesterIsAdmin = Boolean(message.guildId && event.creatorId !== message.author.id && await isServerAdmin(message));
+  if (!canManageEvent(event, { userId: message.author.id, guildId: message.guildId ?? null, isAdmin: requesterIsAdmin })) {
+    await privateResponse(message, t('onlyCreator', {}, guildId));
     return;
   }
   if (event.status === 'cancelled') {
@@ -1176,7 +1361,7 @@ async function cancelEvent(message, idInput) {
   await saveEvents([event]);
   await refreshEventPost(event);
   await notifyInterestedMembers(event, t('noticeCancelled', { title: event.title }, event.guildId));
-  await privateResponse(message, t('cancelled', { title: event.title }, message.guildId));
+  await privateResponse(message, t('cancelled', { title: event.title }, guildId));
   if (event.seriesId) await ensureUpcomingAnnouncement(event.seriesId);
 }
 
@@ -1265,19 +1450,19 @@ function renderHostManageMenu(event, userId) {
   }, event.guildId);
 }
 
-async function startEventManagement(message, idInput) {
+async function startEventManagement(message, idInput, guildId = message.guildId) {
   const id = String(idInput ?? '').trim().replaceAll('`', '').toUpperCase();
   if (!id) {
     await privateResponse(message, t('hostManageUsage', {}, message.guildId));
     return;
   }
-  const event = message.guildId ? findGuildEvent(id, message.guildId) : allEvents().find((item) => item.id === id) ?? null;
+  const event = guildId ? findGuildEvent(id, guildId) : allEvents().find((item) => item.id === id) ?? null;
   if (!event || !event.messageId) {
     await privateResponse(message, t('noEvent', {}, message.guildId ?? null));
     return;
   }
   const requesterIsAdmin = Boolean(message.guildId && event.creatorId !== message.author.id && await isServerAdmin(message));
-  const permitted = canManageEvent(event, { userId: message.author.id, guildId: message.guildId ?? null, isAdmin: requesterIsAdmin });
+  const permitted = canManageEvent(event, { userId: message.author.id, guildId: message.guildId ? guildId : null, isAdmin: requesterIsAdmin });
   if (!permitted) {
     await privateResponse(message, t('onlyCreatorManage', {}, event.guildId));
     return;
@@ -1686,8 +1871,11 @@ function renderEventDetails(event, userId) {
   const state = event.status === 'cancelled' ? t('cancelledTag', {}, guildId)
     : event.status === 'in_progress' ? t('inProgressTag', {}, guildId)
       : event.status === 'completed' ? t('completedTag', {}, guildId) : null;
+  const guild = client.guilds.get(guildId);
   const lines = [
     `🎉 **${event.title}**${state ? ` · ${state}` : ''}`,
+    `🏠 **${t('dmCommunityLabel', {}, guildId)}:** ${guild?.name ?? guildId}`,
+    `📣 **${t('dmChannelLabel', {}, guildId)}:** <#${event.channelId}>`,
     `🆔 **ID:** \`${event.id}\``,
     formatPersonalTime(event, userId),
     `👤 ${t('host', {}, guildId)}: ${event.creatorName}`,

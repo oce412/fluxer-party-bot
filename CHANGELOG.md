@@ -17,3 +17,10 @@
 - Accept UTC/GMT fixed offsets alongside IANA time zones; fixed offsets do not observe daylight saving changes.
 - Fall back to the server duration for malformed or out-of-range optional duration input.
 - Return the original event-creation command when validation fails.
+
+## v0.9.0 — DM event workflow (in development)
+
+- Add per-user community selection for event commands in DMs, with membership checks before each operation.
+- Support DM event creation using the existing command format, plus list, info, RSVP, cancel and host management.
+- Include community and announcement-channel pointers in event detail responses.
+- Keep DM management host-only and scope event lookup to the selected community.
