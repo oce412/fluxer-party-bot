@@ -4,14 +4,15 @@ export function resolveGuildSelection(input, guilds) {
   const options = Array.isArray(guilds) ? guilds : [];
   if (!value || !options.length) return { ok: false, reason: 'invalid' };
 
+  // IDs are numeric too, so resolve an exact ID before interpreting a number as a menu position.
+  const byId = options.find((guild) => String(guild.id) === value);
+  if (byId) return { ok: true, guild: byId };
+
   if (/^\d+$/.test(value)) {
     const index = Number(value);
     const guild = Number.isSafeInteger(index) ? options[index - 1] : null;
     return guild ? { ok: true, guild } : { ok: false, reason: 'invalid' };
   }
-
-  const byId = options.find((guild) => String(guild.id) === value);
-  if (byId) return { ok: true, guild: byId };
 
   const matches = options.filter((guild) => String(guild.name ?? '').trim().toLocaleLowerCase() === value.toLocaleLowerCase());
   if (matches.length === 1) return { ok: true, guild: matches[0] };
