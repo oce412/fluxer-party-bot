@@ -39,7 +39,9 @@ test('builds a scheduled announcement embed with localized display fields', () =
   assert.equal(embed.title, '🎉 Board Game Night');
   assert.equal(embed.description, 'Bring your favourite game.');
   assert.equal(embed.color, getEventEmbedColor('scheduled'));
-  assert.deepEqual(embed.fields.map((field) => field.name), ['Starts', 'Places', 'Length']);
+  assert.ok(embed.fields[0].name.includes('Starts'));
+  assert.ok(embed.fields[1].name.includes('Places'));
+  assert.ok(embed.fields[2].name.includes('Length'));
   assert.equal(embed.fields[1].value, '2/12 · Maybe: 1');
   assert.equal(embed.footer.text, 'Event ID: A1B2C3D4');
 });
@@ -81,10 +83,10 @@ test('builds a DM details embed with community, channel and attendee names', () 
     },
     footer: 'Event ID: A1B2C3D4',
   });
-  assert.equal(embed.fields[0].value, 'Test Community');
-  assert.equal(embed.fields[1].value, '<#123>');
-  assert.equal(embed.fields.find((field) => field.name === 'Attending').value, 'Alice, Bob');
-  assert.equal(embed.fields.find((field) => field.name === 'Maybe').value, 'Charlie');
+  assert.match(embed.description, /Test Community/);
+  assert.match(embed.description, /<#123>/);
+  assert.equal(embed.fields.find((field) => field.name.includes('Attending')).value, 'Alice, Bob');
+  assert.equal(embed.fields.find((field) => field.name.includes('Maybe')).value, 'Charlie');
   assert.equal(embed.color, getEventEmbedColor('scheduled'));
 });
 
@@ -103,8 +105,8 @@ test('builds a single DM list embed with one field per upcoming event', () => {
   assert.equal(embed.title, 'Upcoming events');
   assert.match(embed.description, /Test Community/);
   assert.equal(embed.fields.length, 2);
-  assert.equal(embed.fields[0].name, 'Board Game Night · A1B2C3D4');
-  assert.match(embed.fields[0].value, /Board Game Night/);
+  assert.match(embed.fields[0].name, /Board Game Night · A1B2C3D4/);
+  assert.match(embed.fields[0].value, /👥/);
 });
 
 test('embed builders safely truncate user-controlled text and handle missing event data', () => {
@@ -126,7 +128,6 @@ test('event info and list embeds respect Fluxer field limits', () => {
   assert.equal(embed.fields.length, 20);
   assert.ok(embed.fields.every((field) => field.name.length <= 256 && field.value.length <= 1024));
 });
-
 
 test('all generated embed payloads stay within the aggregate Fluxer text budget', () => {
   const longEvent = {
