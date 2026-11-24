@@ -61,6 +61,10 @@ This is an implementation summary, not a substitute for the final privacy policy
 - `LANGUAGE_REQUEST_FORM_URL` and `LANGUAGE_SUBMISSION_FORM_URL` may be configured. When used, those external form providers and the data sent to them must be disclosed.
 - The application has no automatic event-retention or server-removal deletion job. Event records remain in storage until the operator deletes them through database maintenance. Set and publish an actual retention/deletion procedure before launch.
 
+## AI and voice disclosure
+
+For the current code changes, the accurate FluxerList selection is **Some AI use**: AI assistance was used for part of the code review/implementation and project documentation. The bot itself has no AI-powered chat/generation feature and does not call an AI model API. It has no voice/audio feature. Re-check this declaration against the full project history before submitting.
+
 ## Required before submission
 
 - [ ] Confirm the public bot name and Fluxer application/bot ID.
