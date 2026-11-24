@@ -18,7 +18,7 @@
 - Fall back to the server duration for malformed or out-of-range optional duration input.
 - Return the original event-creation command when validation fails.
 
-## v0.9.1 — Presentation and localization (in development)
+## v0.9.1-beta.1 — Presentation and localization
 
 - Replace event announcement text cards with localized rich embeds that refresh in place when RSVPs or event status change.
 - Use rich embeds for private event lists and event details in DMs.
