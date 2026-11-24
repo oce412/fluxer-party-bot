@@ -2329,7 +2329,8 @@ function renderEventCard(event) {
     attendeesLabel: t('embedAttendees', {}, guildId),
     durationLabel: t('embedDuration', {}, guildId),
     statusLabel: statusKey ? t(statusKey, {}, guildId) : '',
-    footer: t('embedAnnouncementFooter', { id: event.id, hint }, guildId),
+    hostLabel: t('embedHost', {}, guildId),
+    footer: t('embedAnnouncementFooter', { id: event.id }, guildId),
   });
 }
 
