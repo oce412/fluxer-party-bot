@@ -11,9 +11,8 @@ function sendJson(response, statusCode, body) {
   response.end(payload);
 }
 
-const buildRevision = String(process.env.BUILD_REVISION ?? 'unknown').trim().slice(0, 40) || 'unknown';
-
-export async function startHealthServer({ port = null, host = '0.0.0.0', isReady = async () => false } = {}) {
+export async function startHealthServer({ port = null, host = '0.0.0.0', isReady = async () => false, revision = process.env.BUILD_REVISION ?? 'unknown' } = {}) {
+  const buildRevision = String(revision).trim().slice(0, 40) || 'unknown';
   if (port === null || port === undefined || String(port).trim() === '') return null;
   const parsedPort = Number(port);
   if (!Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
