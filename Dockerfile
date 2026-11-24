@@ -2,7 +2,9 @@
 # Build with the verified package-lock.json present in the project root.
 FROM node:24-bookworm-slim
 
-ENV NODE_ENV=production \
+ARG BUILD_REVISION=unknown
+ENV BUILD_REVISION=${BUILD_REVISION} \
+    NODE_ENV=production \
     PORT=3000 \
     DATA_DIR=data-production
 
