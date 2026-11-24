@@ -1,7 +1,7 @@
 # Privacy Policy — Fluxer Party Events Bot (Draft; not yet publishable)
 
 **Status:** Draft — not the final public privacy policy.
-**Last reviewed:** 24 November 2026
+**Last reviewed:** 25 November 2026
 **Operator:** oce412
 **Contact:** fuckDiscord#6219  
 **Public bot name:** Juke
@@ -31,16 +31,15 @@ The data is used to run requested event features: publish event announcements, m
 
 The bot application is deployed as a Docker container through **FluxerHost (Fluxer Community Hosting)**. FluxerHost describes its project deployments as dedicated Kubernetes namespaces with project credentials isolated from other users ([hosting overview](https://fluxer.host/about)). Its [published privacy policy](https://fluxer.host/privacy) says its staff may access project data for technical support, troubleshooting, or terms compliance. It describes its security measures as reasonable and does not guarantee absolute security.
 
-The bot's event, server-setting, and member time-zone records are stored in **PostgreSQL**, selected by the production `DATABASE_URL`. Confirm whether this PostgreSQL instance is provisioned inside FluxerHost's cluster or by a separate database provider, and record the actual provider and region here. FluxerHost advertises an EU infrastructure option ([hosting overview](https://fluxer.host/)), but public information does not establish which region or cluster this particular project uses; do not claim EU storage unless the project deployment has been confirmed as using that option.
+The bot's event, server-setting, and member time-zone records are stored in **PostgreSQL running in a persistent container hosted through FluxerHost**, using the production `DATABASE_URL`. The database provider is therefore FluxerHost, not a separately selected external database service. The exact physical region of the Kubernetes cluster and the persistent storage backing this database have not been confirmed. FluxerHost advertises an EU infrastructure option ([hosting overview](https://fluxer.host/)), but that does not establish that this particular project uses it. Do not claim EU/EEA or any other specific data residency until FluxerHost confirms the location of the bot workload, PostgreSQL container and persistent volume. Also confirm the locations and retention periods for any platform snapshots or backups.
 
 Fluxer processes message events and account data under Fluxer's own terms and privacy policy. The bot does not operate or control Fluxer's platform-side processing.
 
 Other connected services to disclose in the live listing/policy:
 - **Fluxer API/gateway:** receives command messages and supports the bot's event features.
-- **FluxerHost:** hosts the bot container and may access project data for the purposes described in its privacy policy.
-- **PostgreSQL provider:** confirm whether this is FluxerHost or a separately managed service, and disclose its region and applicable provider policy.
+- **FluxerHost:** hosts both the bot application and its persistent PostgreSQL container. Its staff may access project data for the purposes described in its privacy policy.
 - **Optional language forms:** `LANGUAGE_REQUEST_FORM_URL` and `LANGUAGE_SUBMISSION_FORM_URL` may link to third-party form providers. Name the provider(s) if either production setting is configured.
-- **Logs and backups:** application logs are written to standard output and may be collected by the hosting platform; manual PostgreSQL backups are created with `npm run db:backup`. Confirm the host's log/backup retention and whether any separate backup service is enabled.
+- **Logs and backups:** application logs are written to standard output and may be collected by the hosting platform; manual PostgreSQL backups are created with `npm run db:backup`. Confirm the host's log, snapshot and backup retention and whether any separate backup service is enabled.
 
 ## Direct messages and notification fallback
 
@@ -50,7 +49,7 @@ The bot may send direct messages to a member when that member RSVPs or when they
 
 **Application data:** the current bot implementation has no automatic event-history expiry, no periodic database cleanup, and no deletion job triggered when the bot is removed from a community. Event records, RSVP identifiers/names, community settings, and saved member time-zone preferences remain in PostgreSQL until the operator deletes them manually through database maintenance or an equivalent administrative process. In practical terms, the current application retention period is **indefinite until manual deletion**.
 
-**Backups:** `npm run db:backup` creates a PostgreSQL dump when an operator runs it; the application does not schedule backups or automatically expire old dump files. The operator must document where backups are stored, who can access them, and the actual deletion schedule. If FluxerHost or the database provider supplies separate platform backups, their retention period must be confirmed with that provider.
+**Backups:** `npm run db:backup` creates a PostgreSQL dump when an operator runs it; the application does not schedule backups or automatically expire old dump files. The operator must document where backups are stored, who can access them, and the actual deletion schedule. If FluxerHost supplies separate platform snapshots or backups, their retention period must be confirmed with the host.
 
 **Operational logs:** the application writes structured logs to standard output. The hosting platform may collect them; the exact retention period is not stated in the public FluxerHost privacy policy and must be confirmed before publishing a numeric period.
 
@@ -58,7 +57,7 @@ The bot may send direct messages to a member when that member RSVPs or when they
 
 **Server removal:** removing the bot from a community does not currently delete that community's events or settings from PostgreSQL. The operator must handle verified access/deletion requests and manual cleanup. Do not imply that the bot automatically deletes data on leave.
 
-These statements describe the current implementation and public hosting policy as reviewed on 24 November 2026. Re-check provider terms and the production storage arrangement before publishing this policy.
+These statements describe the current implementation and publicly available hosting policy as reviewed on 25 November 2026. Re-check provider terms and confirm the actual cluster, persistent-volume, backup and log locations/retention before publishing this policy.
 
 For access or deletion requests, contact **[publish a working privacy contact, e.g. a Fluxer username or support-server channel]** and identify the server and event concerned. Requests will be verified and handled under applicable law. A server administrator may be asked to verify authority for server-level data requests.
 
@@ -68,7 +67,7 @@ The operator restricts database access, keeps bot tokens and credentials in host
 
 ## International processing and legal basis
 
-The operator and service-provider locations are **[countries/regions]**. If data protection laws such as the GDPR apply, the operator will document the appropriate legal basis and relevant transfer safeguards here after reviewing the actual deployment and user base.
+The bot and PostgreSQL container are hosted through FluxerHost, but the physical region of the cluster and persistent storage has not yet been confirmed. The operator's own country/region and the applicable legal basis and transfer safeguards are **[complete after review of the actual deployment and user base]**.
 
 ## Changes and contact
 
