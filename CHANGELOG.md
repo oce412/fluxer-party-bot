@@ -18,6 +18,12 @@
 - Fall back to the server duration for malformed or out-of-range optional duration input.
 - Return the original event-creation command when validation fails.
 
+## v0.10 — optional weekly Markiplier clip Easter egg (in development)
+
+- Add an optional 1-in-100 roll once per UTC ISO week to post one random HTTPS clip from a configured list to one configured channel.
+- Persist each weekly roll and pending delivery in the destination community's existing settings, without adding a separate scheduler or database table.
+- Keep the feature disabled unless both the destination channel and clip list are configured.
+
 ## v0.9.1 — Presentation and localization (in development)
 
 - Replace event announcement text cards with localized rich embeds that refresh in place when RSVPs or event status change.

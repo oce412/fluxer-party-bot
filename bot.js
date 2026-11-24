@@ -12,6 +12,7 @@ import { availableLocales, hasLocale, localeMetadata, translate as translateText
 import { getEventStartNoticeRecipients, getReminderWindow, hasActivePublishedOccurrence, shouldQueueEventStartNotice } from './src/lifecycle.js';
 import { isSupportedTimeZone, normalizeFixedOffsetTimeZone, normalizeLocalDateTimeInput, resolveDurationMinutes } from './src/time-input.js';
 import { compactNoticeOutbox, completeNoticeIfDelivered, createNoticeJob, markNoticeDelivered } from './src/notices.js';
+import { parseMarkiplierClipUrls, rollWeeklyMarkiplierClip } from './src/weekly-markiplier.js';
 import {
   addEvents,
   allEvents,
@@ -32,6 +33,8 @@ const ENV_LANGUAGE_INPUT = String(process.env.BOT_LANGUAGE ?? 'en').trim().toLow
 const ENV_LANGUAGE = hasLocale(ENV_LANGUAGE_INPUT) ? ENV_LANGUAGE_INPUT : 'en';
 const ENV_DEFAULT_TIME_ZONE_INPUT = process.env.EVENT_DEFAULT_TIME_ZONE || 'Europe/Moscow';
 const ENV_DEFAULT_TIME_ZONE = normalizeFixedOffsetTimeZone(ENV_DEFAULT_TIME_ZONE_INPUT) ?? ENV_DEFAULT_TIME_ZONE_INPUT;
+const MARKIPLIER_CLIP_CHANNEL_ID = String(process.env.MARKIPLIER_CLIP_CHANNEL_ID ?? '').trim();
+const MARKIPLIER_CLIP_URLS = parseMarkiplierClipUrls(process.env.MARKIPLIER_CLIP_URLS);
 const DEFAULT_EVENT_DURATION_MINUTES = 180;
 const REMINDERS = [
   { minutes: 24 * 60, key: 'reminder24', id: '24h' },
@@ -2375,6 +2378,66 @@ function isEventStarted(event) {
   return DateTime.fromISO(event.startsAt, { zone: 'utc' }).toMillis() <= DateTime.utc().toMillis();
 }
 
+
+/**
+ * Make one persisted 1-in-100 roll per ISO week for the configured destination.
+ * A selected URL is saved before delivery and retried on later scheduler passes.
+ */
+async function runWeeklyMarkiplierClipCheck() {
+  if (!MARKIPLIER_CLIP_CHANNEL_ID || MARKIPLIER_CLIP_URLS.length === 0) return;
+
+  let channel;
+  try {
+    channel = await client.channels.fetch(MARKIPLIER_CLIP_CHANNEL_ID);
+  } catch (error) {
+    logConsoleStyle('warn', '[Weekly Markiplier clip channel unavailable]', error?.message ?? error);
+    return;
+  }
+  if (!channel?.isTextBased?.()) return;
+
+  const guildId = String(channel.guildId ?? channel.guild_id ?? '');
+  if (!guildId) return;
+
+  const settings = getGuildSettings(guildId);
+  const weekKey = DateTime.utc().toFormat("kkkk-'W'WW");
+  if (settings.markiplierClipPendingUrl) {
+    // A previous week's pending clip takes priority; consume the current week
+    // too, so a delayed retry cannot be followed by a second clip that week.
+    if (settings.markiplierClipWeek !== weekKey) {
+      await updateGuildSettings(guildId, { markiplierClipWeek: weekKey });
+    }
+    await deliverPendingMarkiplierClip(channel, guildId, settings.markiplierClipPendingUrl);
+    return;
+  }
+  if (settings.markiplierClipWeek === weekKey) return;
+
+  const selectedUrl = rollWeeklyMarkiplierClip(MARKIPLIER_CLIP_URLS);
+  await updateGuildSettings(guildId, {
+    markiplierClipWeek: weekKey,
+    markiplierClipPendingUrl: selectedUrl,
+  });
+  if (selectedUrl) {
+    await deliverPendingMarkiplierClip(channel, guildId, selectedUrl);
+  }
+}
+
+async function deliverPendingMarkiplierClip(channel, guildId, url) {
+  try {
+    await channel.send({
+      content: url,
+      allowedMentions: { parse: [] },
+    });
+    await updateGuildSettings(guildId, {
+      markiplierClipPendingUrl: null,
+      markiplierClipLastSentAt: DateTime.utc().toISO({ suppressMilliseconds: true }),
+    });
+    log.info('Sent a rare weekly Markiplier clip Easter egg', { guildId });
+  } catch (error) {
+    // The pending URL remains persisted so a later scheduler pass can retry it.
+    logConsoleStyle('warn', '[Weekly Markiplier clip delivery will retry]', error?.message ?? error);
+  }
+}
+
 async function runSchedulerSafely() {
   if (schedulerBusy || !gatewayReady) return;
   schedulerBusy = true;
@@ -2395,6 +2458,7 @@ async function runSchedulerSafely() {
     await checkReminders();
     await retryPendingMemberNotices();
     await retryPendingHostOccurrenceNotices();
+    await runWeeklyMarkiplierClipCheck();
   } catch (error) {
     logConsoleStyle('error', '[Scheduler]', error);
   } finally {
