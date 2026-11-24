@@ -210,6 +210,7 @@ const dmGuildContexts = new Map();
 const dmGuildSelectionSessions = new Map();
 const SETUP_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_DM_GUILD_OPTIONS = 20;
+const DM_GUILD_LOOKUP_CONCURRENCY = 5;
 const DM_GUILD_SELECTION_SESSION_TTL_MS = DM_GUILD_CONTEXT_TTL_MS;
 const EVENT_CREATE_SESSION_TTL_MS = 30 * 60 * 1000;
 const EVENT_CREATE_STEPS = ['dateTime', 'timeZone', 'limit', 'repeat', 'duration', 'notifyOnStart', 'title', 'description', 'confirm'];
@@ -543,38 +544,53 @@ async function findMemberGuilds(userId) {
   for (const guild of collectionValues(client.guilds)) {
     if (guild?.id && guild.available !== false) candidatesById.set(String(guild.id), guild);
   }
+
+  const candidates = [...candidatesById.values()];
   const accessible = [];
-  for (const candidate of candidatesById.values()) {
-    try {
-      if (await isUserMemberInGuild(candidate.id, userId)) {
-        accessible.push({ id: String(candidate.id), name: String(candidate.name ?? 'Unnamed server') });
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= candidates.length) return;
+      const candidate = candidates[index];
+      try {
+        if (await isUserMemberInGuild(candidate.id, userId)) {
+          accessible.push({ id: String(candidate.id), name: String(candidate.name ?? 'Unnamed server') });
+        }
+      } catch (error) {
+        logConsoleStyle('warn', '[DM server membership check failed for ' + candidate.id + ']', error?.message ?? error);
       }
-    } catch (error) {
-      logConsoleStyle('warn', '[DM server membership check failed for ' + candidate.id + ']', error?.message ?? error);
     }
-  }
+  };
+
+  // Bound REST concurrency during initial discovery; ordinary commands use the
+  // selected community directly and do not rescan every community.
+  const workerCount = Math.min(DM_GUILD_LOOKUP_CONCURRENCY, candidates.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return accessible.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function selectDmGuild(message, pendingCommand = null, pendingArguments = '', requestedInput = '') {
   const userId = message.author.id;
+  const input = String(requestedInput ?? '').trim();
+
+  // The command dispatcher re-checks membership in the selected community.
+  // Do not enumerate every community when a valid short-lived context exists.
+  const activeGuildId = !input && pendingCommand
+    ? getActiveDmGuildContext(dmGuildContexts, userId)
+    : null;
+  if (activeGuildId) {
+    dmGuildSelectionSessions.delete(userId);
+    await dispatchDmEventCommand(message, pendingCommand, pendingArguments, activeGuildId);
+    return;
+  }
+
   const accessible = await findMemberGuilds(userId);
   if (!accessible.length) {
     dmGuildSelectionSessions.delete(userId);
     clearDmGuildContext(dmGuildContexts, userId);
     await message.author.send(t('dmNoServers', {}, null));
     return;
-  }
-
-  const input = String(requestedInput ?? '').trim();
-  const activeGuildId = getActiveDmGuildContext(dmGuildContexts, userId);
-  if (!input && pendingCommand && activeGuildId) {
-    const current = accessible.find((guild) => guild.id === String(activeGuildId));
-    if (current) {
-      dmGuildSelectionSessions.delete(userId);
-      await dispatchDmEventCommand(message, pendingCommand, pendingArguments, current.id);
-      return;
-    }
   }
 
   if (input) {
