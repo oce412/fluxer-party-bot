@@ -67,7 +67,7 @@ When `HEALTH_PORT` or `PORT` is set, the bot serves:
 - `GET /healthz` — process health, package version and source revision.
 - `GET /readyz` — readiness, including Fluxer gateway and storage health, plus the same version/revision marker.
 
-For the v0.9.1 beta branch, the expected source revision is `f0843eb7e5f2d96e2b1b0d80edf0448a14d18f62`. Compare the `revision` returned by `/healthz` with the commit actually deployed; `unknown` means the host has not been configured to pass the build revision through.
+For a feature-branch deployment, compare the `revision` returned by `/healthz` with the current head SHA shown on GitHub for the branch you intended to deploy; `unknown` means the host has not been configured to pass the build revision through.
 
 The Docker health check uses `/readyz`. Keep the health port reachable by your platform's health checker but do not expose an unnecessary management surface to the public internet.
 
