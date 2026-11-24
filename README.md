@@ -9,7 +9,7 @@
 - **Backups and public-launch drafts:** `npm run db:backup`, recovery instructions, `docs/PRIVACY_POLICY_DRAFT.md`, `docs/PUBLIC_LISTING.md` and `docs/DEPLOYMENT.md`.
 
 - **Rich event presentation:** event announcements, private event lists, and event details use localized embeds. RSVP and status changes update the announcement embed in place; a text fallback keeps older installations working without Embed Links.
-- **Localization credits:** `!event language credits` / `!событие язык авторы` reads the language name and opt-in contributor list from each `.lang` file's `# Language:` and repeated `# Contributor:` metadata.
+- **Localization credits:** `!event language credits` / `!событие язык авторы` reads the language name and opt-in contributor list from each `.lang` file's `# Language:` and repeated `# Contributor:` metadata. See `lang/CONTRIBUTORS.md` for the format and consent rules.
 - **Invite permissions:** `npm run invite` includes the required Embed Links permission. See `docs/INVITE_PERMISSIONS.md`; existing installations may need to be re-authorized to receive this permission.
 
 - **Rare Markiplier Easter egg:** optional 1-in-100 weekly roll, sent only to one configured channel from a curated HTTPS URL list. Disabled until both settings are supplied; see `docs/MARKIPLIER_EASTER_EGG.md`.
