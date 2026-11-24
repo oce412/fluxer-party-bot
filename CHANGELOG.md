@@ -17,3 +17,15 @@
 - Accept UTC/GMT fixed offsets alongside IANA time zones; fixed offsets do not observe daylight saving changes.
 - Fall back to the server duration for malformed or out-of-range optional duration input.
 - Return the original event-creation command when validation fails.
+
+## v0.9.0 — DM event workflow (in development)
+
+- Add per-user community selection for event commands in DMs, with membership checks before each operation.
+- Support guided event creation in server channels and DMs, plus the existing advanced command format.
+- Add server selection, list, info, RSVP, cancel and host management from DMs.
+- Include community and announcement-channel pointers in event detail responses.
+- Re-check the user's membership in the selected community before every DM action; DM event management remains host-only.
+- Scope DM community selection to a 10-minute sliding idle window; pin the selection only while the creation wizard is active.
+- Harden membership lookups against different client collection shapes and re-check membership before dispatch.
+- Await Fluxer.js `guild.members.resolve()` and treat `MEMBER_NOT_FOUND` / `UNKNOWN_MEMBER` as a normal non-member result in DM and admin checks.
+- Make event listing tolerate incomplete event/attendee payloads and split long DM responses into safe message sizes.

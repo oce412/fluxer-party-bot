@@ -1,5 +1,7 @@
 import { Client, Events, PermissionFlags } from '@fluxerjs/core';
-import { canManageEvent, findGuildScopedEvent } from './src/authz.js';
+import { canContinueEventManagementSession, canManageEvent, findGuildScopedEvent, findUniqueEventById } from './src/authz.js';
+import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, fetchGuildMemberSafely, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
+import { getEventAttendees, getUpcomingEvents } from './src/event-list.js';
 import { startHealthServer } from './src/health.js';
 import { isGatewayConnectionHealthy } from './src/gateway-health.js';
 import { log, logConsoleStyle } from './src/logger.js';
@@ -203,7 +205,15 @@ let schedulerBusy = false;
 const publishingEventIds = new Set();
 const setupSessions = new Map();
 const hostManageSessions = new Map();
+const eventCreateSessions = new Map();
+const dmGuildContexts = new Map();
+const dmGuildSelectionSessions = new Map();
 const SETUP_SESSION_TTL_MS = 30 * 60 * 1000;
+const MAX_DM_GUILD_OPTIONS = 20;
+const DM_GUILD_LOOKUP_CONCURRENCY = 5;
+const DM_GUILD_SELECTION_SESSION_TTL_MS = DM_GUILD_CONTEXT_TTL_MS;
+const EVENT_CREATE_SESSION_TTL_MS = 30 * 60 * 1000;
+const EVENT_CREATE_STEPS = ['dateTime', 'timeZone', 'limit', 'repeat', 'duration', 'notifyOnStart', 'title', 'description', 'confirm'];
 const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration'];
 
 client.on(Events.Error, (error) => {
@@ -250,12 +260,20 @@ client.on(Events.MessageCreate, async (message) => {
 
     const rootMatch = text.match(/^!(event|событие|ивент)(?:\s+([\s\S]*))?$/i);
     if (!message.guildId && !rootMatch) {
+      if (eventCreateSessions.has(message.author.id)) {
+        await handleEventCreateWizardAnswer(message, text);
+        return;
+      }
       if (hostManageSessions.has(message.author.id)) {
         await handleHostManageInput(message, text);
         return;
       }
       if (setupSessions.has(message.author.id)) {
         await handleSetupWizardAnswer(message, text);
+        return;
+      }
+      if (dmGuildSelectionSessions.has(message.author.id)) {
+        await handleDmGuildSelectionInput(message, text);
         return;
       }
     }
@@ -271,24 +289,50 @@ client.on(Events.MessageCreate, async (message) => {
       ['язык', 'language'], ['языки', 'language'], ['перевод', 'language'], ['переводы', 'language'], ['languages', 'language'], ['lang', 'language'], ['translate', 'language'],
       ['моязона', 'myzone'], ['мойпояс', 'myzone'], ['личныйпояс', 'myzone'], ['зона', 'myzone'],
       ['записаться', 'rsvp'], ['статус', 'rsvp'], ['управление', 'manage'], ['меню', 'manage'],
+      ['server', 'server'], ['servers', 'server'], ['community', 'server'], ['communities', 'server'],
+      ['сервер', 'server'], ['сообщество', 'server'], ['сообщества', 'server'],
     ]);
     const command = aliases.get(rawCommand) ?? rawCommand;
 
     if (!message.guildId) {
+      // A new root command intentionally leaves the current creation conversation.
+      // Plain-text replies continue to belong to the active wizard; explicit commands do not.
+      const startsOrRestartsWizard = command === 'create'
+        && (!tail || ['wizard', 'мастер', 'guided'].includes(tail.toLowerCase()));
+      if (eventCreateSessions.has(message.author.id)
+        && !startsOrRestartsWizard
+        && !(command === 'cancel' && !tail)) {
+        eventCreateSessions.delete(message.author.id);
+        clearDmGuildContext(dmGuildContexts, message.author.id);
+        await message.author.send(t('createWizardCancelled', {}, null));
+      }
       if (command === 'language') {
         await languageSupportCommand(message, tail, null);
       } else if (command === 'setup') {
         await setupCommand(message, tail);
+      } else if (command === 'server') {
+        await selectDmGuild(message, null, null, tail);
+      } else if (command === 'cancel' && !tail && eventCreateSessions.has(message.author.id)) {
+        eventCreateSessions.delete(message.author.id);
+        clearDmGuildContext(dmGuildContexts, message.author.id);
+        await message.author.send(t('createWizardCancelled', {}, null));
       } else if (command === 'manage') {
-        await startEventManagement(message, tail);
+        // Event IDs are globally unique. Resolve directly, then authorize against the event's community.
+        await startEventManagement(message, tail, null);
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && hostManageSessions.has(message.author.id)) {
         hostManageSessions.delete(message.author.id);
         await message.author.send(t('hostManageClosed', {}, null));
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && setupSessions.has(message.author.id)) {
         setupSessions.delete(message.author.id);
         await message.author.send(t('setupWizardCancelled', {}, null));
+      } else if (['create', 'list', 'info', 'rsvp', 'cancel', 'myzone'].includes(command)) {
+        await selectDmGuild(message, command, tail);
+      } else if (command === 'zones') {
+        await privateResponse(message, t('zones', {}, null));
+      } else if (command === 'help') {
+        await privateResponse(message, t('dmHelp', {}, null));
       } else {
-        await privateResponse(message, t('serverOnly'));
+        await privateResponse(message, t('dmServerUsage', {}, null));
       }
       return;
     }
@@ -298,19 +342,25 @@ client.on(Events.MessageCreate, async (message) => {
         await privateResponse(message, t('help', {}, message.guildId));
         break;
       case 'create':
-        await createEventSeries(message, tail);
+        if (!tail || ['wizard', 'мастер', 'guided'].includes(tail.toLowerCase())) {
+          await startEventCreationWizard(message, message.guildId);
+        } else if (tail.includes('|')) {
+          await createEventSeries(message, tail, message.guildId);
+        } else {
+          await privateResponse(message, t('createUsage', {}, message.guildId));
+        }
         break;
       case 'list':
-        await listEvents(message);
+        await listEvents(message, message.guildId);
         break;
       case 'info':
-        await showEventInfo(message, tail);
+        await showEventInfo(message, tail, message.guildId);
         break;
       case 'rsvp':
-        await commandRsvp(message, tail);
+        await commandRsvp(message, tail, message.guildId);
         break;
       case 'cancel':
-        await cancelEvent(message, tail);
+        await cancelEvent(message, tail, message.guildId);
         break;
       case 'manage':
         await startEventManagement(message, tail);
@@ -415,7 +465,9 @@ async function safeReply(message, content) {
 
 async function privateResponse(message, content, { deleteCommand = true } = {}) {
   try {
-    await message.author.send(content);
+    for (const chunk of splitPrivateMessageContent(content)) {
+      await message.author.send(chunk);
+    }
     if (deleteCommand && typeof message.delete === 'function') {
       try { await message.delete(); } catch { /* Manage Messages is optional. */ }
     }
@@ -431,6 +483,224 @@ async function privateResponse(message, content, { deleteCommand = true } = {}) 
   }
 }
 
+function splitPrivateMessageContent(content, maxLength = 1800) {
+  const text = String(content ?? '');
+  if (text.length <= maxLength) return [text];
+  const chunks = [];
+  let current = '';
+  for (const sourceLine of text.split('\n')) {
+    let line = sourceLine;
+    while (line.length > maxLength) {
+      if (current) { chunks.push(current); current = ''; }
+      chunks.push(line.slice(0, maxLength));
+      line = line.slice(maxLength);
+    }
+    const separatorLength = current ? 1 : 0;
+    if (current.length + separatorLength + line.length > maxLength) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current += (current ? '\n' : '') + line;
+    }
+  }
+  if (current || chunks.length === 0) chunks.push(current);
+  return chunks;
+}
+
+function getCollectionItem(collection, id) {
+  if (!collection) return null;
+  if (typeof collection.get === 'function') {
+    try { const value = collection.get(id); if (value) return value; } catch { /* Try other shapes. */ }
+  }
+  if (collection.cache && typeof collection.cache.get === 'function') {
+    try { const value = collection.cache.get(id); if (value) return value; } catch { /* Try array/object lookup. */ }
+  }
+  if (Array.isArray(collection)) return collection.find((item) => String(item?.id) === String(id)) ?? null;
+  if (typeof collection === 'object' && Object.prototype.hasOwnProperty.call(collection, id)) return collection[id] ?? null;
+  return null;
+}
+
+async function fetchGuildMember(guild, userId) {
+  try {
+    return await fetchGuildMemberSafely(guild, userId);
+  } catch (error) {
+    logConsoleStyle('warn', '[Guild member lookup failed for ' + userId + ' in ' + guild?.id + ']', error?.message ?? error);
+    return null;
+  }
+}
+async function isUserMemberInGuild(guildId, userId) {
+  let guild = getCollectionItem(client.guilds, guildId) ?? getCollectionItem(client.guilds?.cache, guildId);
+  if (!guild && typeof client.guilds?.fetch === 'function') {
+    guild = await client.guilds.fetch(guildId).catch(() => null);
+  }
+  if (!guild) return false;
+  const ownerId = guild.ownerId ?? guild.owner_id;
+  if (ownerId && String(ownerId) === String(userId)) return true;
+  return Boolean(await fetchGuildMember(guild, userId));
+}
+
+async function findMemberGuilds(userId) {
+  const candidatesById = new Map();
+  for (const guild of collectionValues(client.guilds)) {
+    if (guild?.id && guild.available !== false) candidatesById.set(String(guild.id), guild);
+  }
+
+  const candidates = [...candidatesById.values()];
+  const accessible = [];
+  let nextIndex = 0;
+  const worker = async () => {
+    while (true) {
+      const index = nextIndex++;
+      if (index >= candidates.length) return;
+      const candidate = candidates[index];
+      try {
+        if (await isUserMemberInGuild(candidate.id, userId)) {
+          accessible.push({ id: String(candidate.id), name: String(candidate.name ?? 'Unnamed server') });
+        }
+      } catch (error) {
+        logConsoleStyle('warn', '[DM server membership check failed for ' + candidate.id + ']', error?.message ?? error);
+      }
+    }
+  };
+
+  // Bound REST concurrency during initial discovery; ordinary commands use the
+  // selected community directly and do not rescan every community.
+  const workerCount = Math.min(DM_GUILD_LOOKUP_CONCURRENCY, candidates.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return accessible.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function selectDmGuild(message, pendingCommand = null, pendingArguments = '', requestedInput = '') {
+  const userId = message.author.id;
+  const input = String(requestedInput ?? '').trim();
+
+  // The command dispatcher re-checks membership in the selected community.
+  // Do not enumerate every community when a valid short-lived context exists.
+  const activeGuildId = !input && pendingCommand
+    ? getActiveDmGuildContext(dmGuildContexts, userId)
+    : null;
+  if (activeGuildId) {
+    dmGuildSelectionSessions.delete(userId);
+    await dispatchDmEventCommand(message, pendingCommand, pendingArguments, activeGuildId);
+    return;
+  }
+
+  const accessible = await findMemberGuilds(userId);
+  if (!accessible.length) {
+    dmGuildSelectionSessions.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
+    await message.author.send(t('dmNoServers', {}, null));
+    return;
+  }
+
+  if (input) {
+    const resolved = resolveGuildSelection(input, accessible);
+    if (!resolved.ok) {
+      await message.author.send(resolved.reason === 'ambiguous'
+        ? t('dmServerAmbiguous', { options: formatDmGuildOptions(accessible) }, null)
+        : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(accessible) }, null));
+      return;
+    }
+    setDmGuildContext(dmGuildContexts, userId, resolved.guild.id);
+    dmGuildSelectionSessions.delete(userId);
+    await message.author.send(t('dmServerSelected', { guild: resolved.guild.name }, resolved.guild.id));
+    if (pendingCommand) await dispatchDmEventCommand(message, pendingCommand, pendingArguments, resolved.guild.id);
+    return;
+  }
+
+  if (accessible.length === 1) {
+    setDmGuildContext(dmGuildContexts, userId, accessible[0].id);
+    dmGuildSelectionSessions.delete(userId);
+    if (pendingCommand) await dispatchDmEventCommand(message, pendingCommand, pendingArguments, accessible[0].id);
+    else await message.author.send(t('dmServerSelected', { guild: accessible[0].name }, accessible[0].id));
+    return;
+  }
+
+  const currentContext = peekDmGuildContext(dmGuildContexts, userId);
+  const currentGuild = currentContext
+    ? accessible.find((guild) => guild.id === String(currentContext.guildId))
+    : null;
+  dmGuildSelectionSessions.set(userId, {
+    guilds: accessible,
+    pendingCommand,
+    pendingArguments,
+    expiresAt: Date.now() + DM_GUILD_SELECTION_SESSION_TTL_MS,
+  });
+  await message.author.send(t('dmServerPrompt', {
+    options: formatDmGuildOptions(accessible),
+    current: currentGuild?.name ?? t('dmNoCurrentServer', {}, null),
+  }, null));
+}
+
+function formatDmGuildOptions(guilds) {
+  const visible = guilds.slice(0, MAX_DM_GUILD_OPTIONS);
+  const lines = visible.map((guild, index) => (index + 1) + '. **' + guild.name + '**').join('\n');
+  const more = guilds.length > visible.length ? '\n' + t('dmServerPromptMore', { count: guilds.length }, null) : '';
+  return lines + more;
+}
+
+async function handleDmGuildSelectionInput(message, rawInput) {
+  const session = dmGuildSelectionSessions.get(message.author.id);
+  if (!session) return;
+  if (session.expiresAt <= Date.now()) {
+    dmGuildSelectionSessions.delete(message.author.id);
+    await message.author.send(t('dmServerSelectionExpired', {}, null));
+    return;
+  }
+  const input = String(rawInput ?? '').trim();
+  if (['cancel', 'отмена', 'стоп'].includes(input.toLowerCase())) {
+    dmGuildSelectionSessions.delete(message.author.id);
+    await message.author.send(t('dmServerSelectionCancelled', {}, null));
+    return;
+  }
+  const resolved = resolveGuildSelection(input, session.guilds);
+  if (!resolved.ok) {
+    await message.author.send(resolved.reason === 'ambiguous'
+      ? t('dmServerAmbiguous', { options: formatDmGuildOptions(session.guilds) }, null)
+      : t('dmServerSelectionInvalid', { options: formatDmGuildOptions(session.guilds) }, null));
+    return;
+  }
+  if (!(await isUserMemberInGuild(resolved.guild.id, message.author.id))) {
+    dmGuildSelectionSessions.delete(message.author.id);
+    clearDmGuildContext(dmGuildContexts, message.author.id);
+    await message.author.send(t('dmServerNotMember', { guild: resolved.guild.name }, null));
+    return;
+  }
+
+  setDmGuildContext(dmGuildContexts, message.author.id, resolved.guild.id);
+  dmGuildSelectionSessions.delete(message.author.id);
+  await message.author.send(t('dmServerSelected', { guild: resolved.guild.name }, resolved.guild.id));
+  if (session.pendingCommand) {
+    await dispatchDmEventCommand(message, session.pendingCommand, session.pendingArguments, resolved.guild.id);
+  }
+}
+
+async function dispatchDmEventCommand(message, command, rawArguments, guildId) {
+  if (!(await isUserMemberInGuild(guildId, message.author.id))) {
+    clearDmGuildContext(dmGuildContexts, message.author.id);
+    await message.author.send(t('dmServerNotMember', { guild: guildId }, null));
+    return;
+  }
+  switch (command) {
+    case 'create':
+      if (!rawArguments.trim() || ['wizard', 'мастер', 'guided'].includes(rawArguments.trim().toLowerCase())) {
+        await startEventCreationWizard(message, guildId);
+      } else if (rawArguments.includes('|')) {
+        await createEventSeries(message, rawArguments, guildId);
+      } else {
+        await message.author.send(t('createUsage', {}, guildId));
+      }
+      break;
+    case 'list': await listEvents(message, guildId); break;
+    case 'info': await showEventInfo(message, rawArguments, guildId); break;
+    case 'rsvp': await commandRsvp(message, rawArguments, guildId); break;
+    case 'cancel': await cancelEvent(message, rawArguments, guildId); break;
+    case 'manage': await startEventManagement(message, rawArguments, guildId); break;
+    case 'zones': await privateResponse(message, t('zones', {}, guildId)); break;
+    case 'myzone': await myZoneCommand(message, rawArguments, guildId); break;
+    default: await message.author.send(t('dmServerUsage', {}, guildId));
+  }
+}
 async function setupCommand(message, rawArguments) {
   const input = String(rawArguments ?? '').trim();
   if (!message.guildId) {
@@ -607,17 +877,23 @@ function collectionValues(collection) {
 }
 
 async function isUserAdminInGuild(guildId, userId) {
-  let guild = client.guilds.get(guildId);
-  if (!guild) guild = await client.guilds.fetch(guildId);
+  let guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  if (!guild && typeof client.guilds?.fetch === 'function') {
+    try {
+      guild = await client.guilds.fetch(guildId);
+    } catch (error) {
+      logConsoleStyle('warn', '[Admin check guild fetch failed for ' + guildId + ']', error?.message ?? error);
+      return false;
+    }
+  }
   if (!guild) return false;
-  if (guild.ownerId === userId || guild.owner_id === userId) return true;
-  let member = guild.members?.get(userId);
-  if (!member && typeof guild.fetchMember === 'function') member = await guild.fetchMember(userId);
-  if (!member && guild.members?.resolve) member = await guild.members.resolve(userId);
+  const ownerId = guild.ownerId ?? guild.owner_id;
+  if (ownerId && String(ownerId) === String(userId)) return true;
+  const member = await fetchGuildMember(guild, userId);
   return Boolean(member?.permissions?.has(PermissionFlags.ManageGuild)
     || member?.permissions?.has(PermissionFlags.Administrator)
-    || guild.ownerId === userId
-    || guild.owner_id === userId);
+    || (ownerId && String(ownerId) === String(userId)));
 }
 
 function listSetupChannels(guild, preferredChannelId = null, existingChannelId = null) {
@@ -821,8 +1097,7 @@ async function isServerAdmin(message) {
   }
 }
 
-async function myZoneCommand(message, rawZone) {
-  const guildId = message.guildId;
+async function myZoneCommand(message, rawZone, guildId = message.guildId) {
   const input = rawZone.trim();
   const current = getUserTimeZone(guildId, message.author.id);
   if (!input) {
@@ -883,55 +1158,319 @@ function safeConfiguredFormUrl(rawValue) {
   }
 }
 
-async function createEventSeries(message, rawArguments) {
-  const guildId = message.guildId;
-  const raw = rawArguments.trim().replace(/^\|/, '').trim();
-  const fields = raw.split('|').map((field) => field.trim());
-  if (fields.length < 6 || fields.length > 8) {
-    await replyCreateError(message, t('createUsage', {}, guildId));
+async function startEventCreationWizard(message, guildId) {
+  const config = configForGuild(guildId);
+  if (!config.announcementChannelId) {
+    await privateResponse(message, t('noChannelConfigured', {}, guildId));
     return;
   }
 
+  let guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  if (!guild && typeof client.guilds?.fetch === 'function') {
+    guild = await client.guilds.fetch(guildId).catch(() => null);
+  }
+  const communityName = String(guild?.name ?? guildId);
+
+  setupSessions.delete(message.author.id);
+  hostManageSessions.delete(message.author.id);
+  dmGuildSelectionSessions.delete(message.author.id);
+  setDmGuildContext(dmGuildContexts, message.author.id, guildId, { pinned: true });
+
+  const session = {
+    guildId,
+    communityName,
+    steps: [...EVENT_CREATE_STEPS],
+    stepIndex: 0,
+    values: {
+      dateTime: '',
+      timeZone: config.defaultTimeZone,
+      maxAttendees: null,
+      recurrence: { ok: true, frequency: null, count: 1 },
+      durationMinutes: config.eventDurationMinutes,
+      durationWasDefaulted: false,
+      notifyOnStart: false,
+      title: '',
+      description: '',
+    },
+    expiresAt: Date.now() + EVENT_CREATE_SESSION_TTL_MS,
+  };
+  eventCreateSessions.set(message.author.id, session);
+
+  try {
+    await message.author.send(t('createWizardIntro', { community: communityName, guildId }, guildId));
+    await promptEventCreateWizardStep(message.author, session);
+    if (message.guildId) await tryDeleteCommand(message);
+  } catch (error) {
+    eventCreateSessions.delete(message.author.id);
+    clearDmGuildContext(dmGuildContexts, message.author.id);
+    logConsoleStyle('warn', '[Event creation wizard DM failed]', error?.message ?? error);
+    if (message.guildId) {
+      await privateResponse(message, t('dmFailed', {}, guildId), { deleteCommand: false });
+    } else {
+      await message.author.send(t('dmFailed', {}, guildId)).catch(() => {});
+    }
+  }
+}
+
+async function promptEventCreateWizardStep(user, session) {
+  session.expiresAt = Date.now() + EVENT_CREATE_SESSION_TTL_MS;
+  const guildId = session.guildId;
+  const values = session.values;
+  const step = session.steps[session.stepIndex];
+
+  if (step === 'dateTime') {
+    await user.send(t('createWizardAskDate', {}, guildId));
+  } else if (step === 'timeZone') {
+    await user.send(t('createWizardAskTimezone', { zone: values.timeZone }, guildId));
+  } else if (step === 'limit') {
+    const current = values.maxAttendees === null ? t('cardNoLimit', {}, guildId) : String(values.maxAttendees);
+    await user.send(t('createWizardAskLimit', { current }, guildId));
+  } else if (step === 'repeat') {
+    const current = values.recurrence.count > 1
+      ? `${values.recurrence.frequency}:${values.recurrence.count}`
+      : t('createWizardOnce', {}, guildId);
+    await user.send(t('createWizardAskRepeat', { current }, guildId));
+  } else if (step === 'duration') {
+    await user.send(t('createWizardAskDuration', { duration: values.durationMinutes }, guildId));
+  } else if (step === 'notifyOnStart') {
+    await user.send(t('createWizardAskNotify', { current: values.notifyOnStart ? 'yes' : 'no' }, guildId));
+  } else if (step === 'title') {
+    await user.send(t('createWizardAskTitle', { current: values.title || '—' }, guildId));
+  } else if (step === 'description') {
+    await user.send(t('createWizardAskDescription', { current: values.description || '—' }, guildId));
+  } else if (step === 'confirm') {
+    const zonedStart = DateTime.fromFormat(values.dateTime, 'yyyy-MM-dd HH:mm', {
+      zone: values.timeZone,
+      setZone: true,
+      locale: localeForGuild(guildId),
+      numberingSystem: 'latn',
+    });
+    const limit = values.maxAttendees === null ? t('cardNoLimit', {}, guildId) : String(values.maxAttendees);
+    const repeat = values.recurrence.count > 1
+      ? `${values.recurrence.frequency}:${values.recurrence.count}`
+      : t('createWizardOnce', {}, guildId);
+    const preview = t('createWizardPreview', {
+      community: session.communityName ?? guildId,
+      guildId,
+      title: values.title,
+      when: zonedStart.isValid ? formatShortDateTime(zonedStart, guildId) : values.dateTime,
+      zone: values.timeZone,
+      limit,
+      repeat,
+      duration: values.durationMinutes,
+      notify: values.notifyOnStart ? t('createWizardNotifyYes', {}, guildId) : t('createWizardNotifyNo', {}, guildId),
+      description: values.description || t('noDescription', {}, guildId),
+    }, guildId);
+    await user.send(`${preview}\n\n${t('createWizardConfirm', {}, guildId)}\n\n${t('createWizardBackHint', {}, guildId)}`);
+  }
+}
+
+async function handleEventCreateWizardAnswer(message, rawInput) {
+  const userId = message.author.id;
+  const session = eventCreateSessions.get(userId);
+  if (!session) return;
+
+  if (session.expiresAt <= Date.now()) {
+    eventCreateSessions.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
+    await message.author.send(t('createWizardExpired', {}, session.guildId));
+    return;
+  }
+
+  if (!(await isUserMemberInGuild(session.guildId, userId))) {
+    eventCreateSessions.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
+    await message.author.send(t('dmServerNotMember', { guild: session.guildId }, null));
+    return;
+  }
+
+  const guildId = session.guildId;
+  const input = String(rawInput ?? '').trim();
+  const normalized = input.toLowerCase();
+  const step = session.steps[session.stepIndex];
+
+  if (['cancel', 'отмена', 'стоп', 'stop'].includes(normalized)) {
+    eventCreateSessions.delete(userId);
+    clearDmGuildContext(dmGuildContexts, userId);
+    await message.author.send(t('createWizardCancelled', {}, guildId));
+    return;
+  }
+
+  if (['back', 'назад'].includes(normalized)) {
+    if (session.stepIndex === 0) {
+      await message.author.send(t('createWizardFirstStep', {}, guildId));
+      return;
+    }
+    session.stepIndex -= 1;
+    await promptEventCreateWizardStep(message.author, session);
+    return;
+  }
+
+  const skip = ['', 'skip', 'default', 'по умолчанию', 'пропустить', 'server', 'community', 'guild', 'сервер', 'сообщество'].includes(normalized);
+
+  if (step === 'dateTime') {
+    const dateTime = normalizeLocalDateTimeInput(input);
+    if (!dateTime) {
+      await message.author.send(t('dateInvalid', {}, guildId));
+      return;
+    }
+    session.values.dateTime = dateTime;
+  } else if (step === 'timeZone') {
+    const timeZone = skip ? configForGuild(guildId).defaultTimeZone : resolveTimeZone(input, guildId);
+    if (!validTimeZone(timeZone)) {
+      await message.author.send(t('zoneInvalid', { zone: input }, guildId));
+      return;
+    }
+    const zonedStart = DateTime.fromFormat(session.values.dateTime, 'yyyy-MM-dd HH:mm', {
+      zone: timeZone,
+      setZone: true,
+      locale: localeForGuild(guildId),
+      numberingSystem: 'latn',
+    });
+    if (!zonedStart.isValid || zonedStart.toFormat('yyyy-MM-dd HH:mm') !== session.values.dateTime) {
+      await message.author.send(t('nonexistentTime', { zone: timeZone }, guildId));
+      return;
+    }
+    if (zonedStart.toMillis() <= Date.now() + 60_000) {
+      await message.author.send(t('timePast', {}, guildId));
+      return;
+    }
+    session.values.timeZone = timeZone;
+  } else if (step === 'limit') {
+    if (skip || ['none', '-', 'no limit', 'без лимита', 'безлимит'].includes(normalized)) {
+      session.values.maxAttendees = null;
+    } else {
+      const limit = Number(input);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+        await message.author.send(t('limitInvalid', {}, guildId));
+        return;
+      }
+      session.values.maxAttendees = limit;
+    }
+  } else if (step === 'repeat') {
+    const recurrence = parseRecurrence(skip ? '1' : input);
+    if (!recurrence.ok) {
+      await message.author.send(t('repeatInvalid', {}, guildId));
+      return;
+    }
+    session.values.recurrence = recurrence;
+  } else if (step === 'duration') {
+    const resolved = skip
+      ? { minutes: configForGuild(guildId).eventDurationMinutes, defaulted: false }
+      : resolveDurationMinutes(input, configForGuild(guildId).eventDurationMinutes);
+    session.values.durationMinutes = resolved.minutes;
+    session.values.durationWasDefaulted = resolved.defaulted;
+    if (resolved.defaulted) {
+      await message.author.send(t('createDurationDefaulted', { duration: resolved.minutes }, guildId));
+    }
+  } else if (step === 'notifyOnStart') {
+    const notify = skip ? false : parseOptionalBoolean(input);
+    if (notify === null) {
+      await message.author.send(t('createNotifyInvalid', {}, guildId));
+      return;
+    }
+    session.values.notifyOnStart = notify;
+  } else if (step === 'title') {
+    if (!input || input.length > 100) {
+      await message.author.send(t('titleInvalid', {}, guildId));
+      return;
+    }
+    session.values.title = input;
+  } else if (step === 'description') {
+    const description = skip || input === '-' ? '' : input;
+    if (description.length > 700) {
+      await message.author.send(t('descriptionInvalid', {}, guildId));
+      return;
+    }
+    session.values.description = description;
+  } else if (step === 'confirm') {
+    if (['yes', 'y', 'да', 'confirm', 'publish', 'создать'].includes(normalized)) {
+      const zonedStart = DateTime.fromFormat(session.values.dateTime, 'yyyy-MM-dd HH:mm', {
+        zone: session.values.timeZone,
+        setZone: true,
+        locale: localeForGuild(guildId),
+        numberingSystem: 'latn',
+      });
+      if (!zonedStart.isValid || zonedStart.toMillis() <= Date.now() + 60_000) {
+        await message.author.send(t('timePast', {}, guildId));
+        session.stepIndex = 0;
+        await promptEventCreateWizardStep(message.author, session);
+        return;
+      }
+      eventCreateSessions.delete(userId);
+      try {
+        await publishEventSeries(message, guildId, {
+          title: session.values.title,
+          description: session.values.description,
+          zonedStart,
+          timeZone: session.values.timeZone,
+          maxAttendees: session.values.maxAttendees,
+          recurrence: session.values.recurrence,
+          durationMinutes: session.values.durationMinutes,
+          durationWasDefaulted: session.values.durationWasDefaulted,
+          notifyOnStart: session.values.notifyOnStart,
+        });
+      } finally {
+        clearDmGuildContext(dmGuildContexts, userId);
+      }
+      return;
+    }
+    if (['no', 'n', 'нет', 'abort', 'отменить'].includes(normalized)) {
+      eventCreateSessions.delete(userId);
+      clearDmGuildContext(dmGuildContexts, userId);
+      await message.author.send(t('createWizardCancelled', {}, guildId));
+      return;
+    }
+    await message.author.send(t('createWizardConfirm', {}, guildId));
+    return;
+  }
+
+  session.stepIndex += 1;
+  session.expiresAt = Date.now() + EVENT_CREATE_SESSION_TTL_MS;
+  await promptEventCreateWizardStep(message.author, session);
+}
+
+async function createEventSeries(message, rawArguments, guildId = message.guildId) {
+  const raw = String(rawArguments ?? '').trim().replace(/^\|/, '').trim();
+  const fields = raw.split('|').map((field) => field.trim());
+  if (fields.length < 6 || fields.length > 8) {
+    await replyCreateError(message, t('createUsage', {}, guildId), guildId);
+    return;
+  }
   const [title, dateInput, rawTimeZone, maxInput, descriptionInput, repeatInput] = fields;
   let durationInput = fields[6];
   let notifyStartInput = fields[7];
-  // Friendly short form: a final yes/no directly after recurrence means notify-on-start.
   if (fields.length === 7 && ['yes', 'no', 'да', 'нет', 'true', 'false', 'on', 'off'].includes(String(fields[6] ?? '').toLowerCase())) {
     notifyStartInput = fields[6];
     durationInput = '';
   }
-
   const description = descriptionInput === '-' ? '' : descriptionInput;
   const timeZone = resolveTimeZone(rawTimeZone, guildId);
   const config = configForGuild(guildId);
-  const { minutes: durationMinutes, defaulted: durationWasDefaulted } = resolveDurationMinutes(
-    durationInput,
-    config.eventDurationMinutes,
-  );
+  const { minutes: durationMinutes, defaulted: durationWasDefaulted } = resolveDurationMinutes(durationInput, config.eventDurationMinutes);
   const notifyOnStart = parseOptionalBoolean(notifyStartInput);
   if (notifyOnStart === null) {
-    await replyCreateError(message, t('createNotifyInvalid', {}, guildId));
+    await replyCreateError(message, t('createNotifyInvalid', {}, guildId), guildId);
     return;
   }
-
   if (!title || title.length > 100) {
-    await replyCreateError(message, t('titleInvalid', {}, guildId));
+    await replyCreateError(message, t('titleInvalid', {}, guildId), guildId);
     return;
   }
   if (description.length > 700) {
-    await replyCreateError(message, t('descriptionInvalid', {}, guildId));
+    await replyCreateError(message, t('descriptionInvalid', {}, guildId), guildId);
     return;
   }
   if (!rawTimeZone || !validTimeZone(timeZone)) {
-    await replyCreateError(message, t('zoneInvalid', { zone: rawTimeZone }, guildId));
+    await replyCreateError(message, t('zoneInvalid', { zone: rawTimeZone }, guildId), guildId);
     return;
   }
   const normalizedDateInput = normalizeLocalDateTimeInput(dateInput);
   if (!normalizedDateInput) {
-    await replyCreateError(message, t('dateInvalid', {}, guildId));
+    await replyCreateError(message, t('dateInvalid', {}, guildId), guildId);
     return;
   }
-
   const zonedStart = DateTime.fromFormat(normalizedDateInput, 'yyyy-MM-dd HH:mm', {
     zone: timeZone,
     setZone: true,
@@ -939,34 +1478,42 @@ async function createEventSeries(message, rawArguments) {
     numberingSystem: 'latn',
   });
   if (!zonedStart.isValid) {
-    await replyCreateError(message, t('dateInvalid', {}, guildId));
+    await replyCreateError(message, t('dateInvalid', {}, guildId), guildId);
     return;
   }
   if (zonedStart.toFormat('yyyy-MM-dd HH:mm') !== normalizedDateInput) {
-    await replyCreateError(message, t('nonexistentTime', { zone: timeZone }, guildId));
+    await replyCreateError(message, t('nonexistentTime', { zone: timeZone }, guildId), guildId);
     return;
   }
   if (zonedStart.toMillis() <= Date.now() + 60_000) {
-    await replyCreateError(message, t('timePast', {}, guildId));
+    await replyCreateError(message, t('timePast', {}, guildId), guildId);
     return;
   }
-
   let maxAttendees = null;
   if (maxInput && !['none', '-', 'без лимита', 'безлимит', 'no limit'].includes(maxInput.toLowerCase())) {
     const parsedLimit = Number(maxInput);
     if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 1000) {
-      await replyCreateError(message, t('limitInvalid', {}, guildId));
+      await replyCreateError(message, t('limitInvalid', {}, guildId), guildId);
       return;
     }
     maxAttendees = parsedLimit;
   }
-
   const recurrence = parseRecurrence(repeatInput);
   if (!recurrence.ok) {
-    await replyCreateError(message, t('repeatInvalid', {}, guildId));
+    await replyCreateError(message, t('repeatInvalid', {}, guildId), guildId);
     return;
   }
+  await publishEventSeries(message, guildId, {
+    title, description, zonedStart, timeZone, maxAttendees, recurrence,
+    durationMinutes, durationWasDefaulted, notifyOnStart,
+  });
+}
 
+async function publishEventSeries(message, guildId, {
+  title, description, zonedStart, timeZone, maxAttendees, recurrence,
+  durationMinutes, durationWasDefaulted = false, notifyOnStart = false,
+}) {
+  const config = configForGuild(guildId);
   if (!config.announcementChannelId) {
     await privateResponse(message, t('noChannelConfigured', {}, guildId));
     return;
@@ -991,7 +1538,6 @@ async function createEventSeries(message, rawArguments) {
       if (recurrence.frequency === 'weekly') occurrenceStart = zonedStart.plus({ weeks: index });
       if (recurrence.frequency === 'monthly') occurrenceStart = zonedStart.plus({ months: index });
     }
-
     occurrences.push({
       id: newEventId(),
       seriesId,
@@ -1030,12 +1576,17 @@ async function createEventSeries(message, rawArguments) {
   const confirmation = recurrence.count > 1
     ? t('createdMany', { count: recurrence.count, title, id: first.id, when: timeLabel }, guildId)
     : t('createdOne', { title, id: first.id, when: timeLabel }, guildId);
+  const community = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  const destination = t('createdInCommunity', {
+    community: community?.name ?? guildId,
+    guildId,
+    channel: `<#${config.announcementChannelId}>`,
+  }, guildId);
   const manageHint = t('hostManageCommandHint', { id: first.id, command: manageCommandForGuild(guildId) }, guildId);
-  const durationNote = durationWasDefaulted
-    ? `\n\n${t('createDurationDefaulted', { duration: durationMinutes }, guildId)}`
-    : '';
+  const durationNote = durationWasDefaulted ? `\n\n${t('createDurationDefaulted', { duration: durationMinutes }, guildId)}` : '';
   const startNoticeNote = notifyOnStart ? `\n${t('createStartNoticeEnabled', {}, guildId)}` : '';
-  const delivered = await privateResponse(message, `${confirmation}\n\n${t('createNote', {}, guildId)}${durationNote}${startNoticeNote}\n\n${manageHint}`);
+  const delivered = await privateResponse(message, `${confirmation}\n${destination}\n\n${t('createNote', {}, guildId)}${durationNote}${startNoticeNote}\n\n${manageHint}`);
   if (delivered) setupSessions.delete(message.author.id);
 }
 
@@ -1047,9 +1598,9 @@ function parseOptionalBoolean(value) {
   return null;
 }
 
-async function replyCreateError(message, content) {
+async function replyCreateError(message, content, guildId = message.guildId) {
   const originalCommand = String(message.content ?? '');
-  const preservedText = `${t('createCommandPreserved', {}, message.guildId)}\n${originalCommand}`;
+  const preservedText = `${t('createCommandPreserved', {}, guildId)}\n${originalCommand}`;
 
   if (!message.guildId) {
     await safeReply(message, content);
@@ -1087,39 +1638,52 @@ function parseRecurrence(input) {
   return { ok: true, frequency, count };
 }
 
-async function listEvents(message) {
-  const now = DateTime.utc().toMillis();
-  const upcoming = allEvents()
-    .filter((event) => event.guildId === message.guildId
-      && event.status === 'scheduled'
-      && event.messageId
-      && DateTime.fromISO(event.startsAt, { zone: 'utc' }).toMillis() > now)
-    .sort((a, b) => DateTime.fromISO(a.startsAt).toMillis() - DateTime.fromISO(b.startsAt).toMillis())
-    .slice(0, 12);
-
+async function listEvents(message, guildId = message.guildId) {
+  const upcoming = getUpcomingEvents(allEvents(), guildId, Date.now(), 12);
   if (upcoming.length === 0) {
-    await privateResponse(message, t('noUpcoming', {}, message.guildId));
+    await privateResponse(message, t('noUpcoming', {}, guildId));
     return;
   }
 
+  const guild = getCollectionItem(client.guilds, guildId) ?? getCollectionItem(client.guilds?.cache, guildId);
+  const channel = configForGuild(guildId).announcementChannelId;
+  const header = t('dmEventLocation', {
+    guild: guild?.name ?? guildId,
+    channel: channel ? '<#' + channel + '>' : t('dmUnknownChannel', {}, guildId),
+  }, guildId);
   const lines = upcoming.map((event) => {
-    const yesCount = event.attendees.filter((attendee) => attendee.status === 'yes').length;
-    const spots = event.maxAttendees === null ? `${yesCount} · ${langForGuild(message.guildId) === 'ru' ? 'без лимита' : 'no limit'}` : `${yesCount}/${event.maxAttendees}`;
-    return t('upcomingLine', { title: event.title, id: event.id, when: formatPersonalTime(event, message.author.id).replaceAll('\n', ' · '), spots }, message.guildId);
+    const attendees = getEventAttendees(event);
+    const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
+    const rawLimit = Number(event.maxAttendees);
+    const hasLimit = Number.isInteger(rawLimit) && rawLimit > 0;
+    const spots = hasLimit
+      ? yesCount + '/' + rawLimit
+      : yesCount + ' · ' + (langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit');
+    let when = String(event.startsAt);
+    try {
+      when = formatPersonalTime(event, message.author.id).replaceAll('\n', ' · ');
+    } catch (error) {
+      logConsoleStyle('warn', '[Event list time formatting failed for ' + String(event.id ?? 'unknown') + ']', error?.message ?? error);
+    }
+    return t('upcomingLine', {
+      title: String(event.title ?? 'Untitled event').slice(0, 100),
+      id: String(event.id ?? 'unknown'),
+      when,
+      spots,
+    }, guildId);
   });
-  await privateResponse(message, `${t('upcomingTitle', {}, message.guildId)}\n${lines.join('\n')}\n\n${t('upcomingFooter', {}, message.guildId)}`);
+  await privateResponse(message, header + '\n\n' + t('upcomingTitle', {}, guildId) + '\n' + lines.join('\n') + '\n\n' + t('upcomingFooter', {}, guildId));
 }
-
-async function showEventInfo(message, idInput) {
-  const event = findGuildEvent(idInput, message.guildId);
+async function showEventInfo(message, idInput, guildId = message.guildId) {
+  const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
-    await privateResponse(message, t('noEvent', {}, message.guildId));
+    await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
   await privateResponse(message, renderEventDetails(event, message.author.id));
 }
 
-async function commandRsvp(message, rawArguments) {
+async function commandRsvp(message, rawArguments, guildId = message.guildId) {
   const [idInput, statusInput] = rawArguments.split(/\s+/).filter(Boolean);
   const statusMap = new Map([
     ['yes', 'yes'], ['да', 'yes'], ['иду', 'yes'],
@@ -1128,17 +1692,17 @@ async function commandRsvp(message, rawArguments) {
   ]);
   const status = statusMap.get((statusInput ?? '').toLowerCase());
   if (!idInput || !status) {
-    await privateResponse(message, t('rsvpUsage', {}, message.guildId));
+    await privateResponse(message, t('rsvpUsage', {}, guildId));
     return;
   }
 
-  const event = findGuildEvent(idInput, message.guildId);
+  const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
-    await privateResponse(message, t('noEvent', {}, message.guildId));
+    await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
   if (event.status !== 'scheduled' || isEventStarted(event)) {
-    await privateResponse(message, t('rsvpClosed', {}, message.guildId));
+    await privateResponse(message, t('rsvpClosed', {}, guildId));
     return;
   }
 
@@ -1156,19 +1720,19 @@ async function commandRsvp(message, rawArguments) {
   await privateResponse(message, personalizedConfirmation);
 }
 
-async function cancelEvent(message, idInput) {
-  const event = findGuildEvent(idInput, message.guildId);
+async function cancelEvent(message, idInput, guildId = message.guildId) {
+  const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
-    await privateResponse(message, t('noEvent', {}, message.guildId));
+    await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
-  const requesterIsAdmin = event.creatorId !== message.author.id && await isServerAdmin(message);
-  if (!canManageEvent(event, { userId: message.author.id, guildId: message.guildId, isAdmin: requesterIsAdmin })) {
-    await privateResponse(message, t('onlyCreator', {}, message.guildId));
+  const requesterIsAdmin = Boolean(message.guildId && event.creatorId !== message.author.id && await isServerAdmin(message));
+  if (!canManageEvent(event, { userId: message.author.id, guildId: message.guildId ?? null, isAdmin: requesterIsAdmin })) {
+    await privateResponse(message, t('onlyCreator', {}, guildId));
     return;
   }
   if (event.status === 'cancelled') {
-    await privateResponse(message, t('alreadyCancelled', {}, message.guildId));
+    await privateResponse(message, t('alreadyCancelled', {}, guildId));
     return;
   }
 
@@ -1176,7 +1740,7 @@ async function cancelEvent(message, idInput) {
   await saveEvents([event]);
   await refreshEventPost(event);
   await notifyInterestedMembers(event, t('noticeCancelled', { title: event.title }, event.guildId));
-  await privateResponse(message, t('cancelled', { title: event.title }, message.guildId));
+  await privateResponse(message, t('cancelled', { title: event.title }, guildId));
   if (event.seriesId) await ensureUpcomingAnnouncement(event.seriesId);
 }
 
@@ -1265,19 +1829,30 @@ function renderHostManageMenu(event, userId) {
   }, event.guildId);
 }
 
-async function startEventManagement(message, idInput) {
+async function startEventManagement(message, idInput, guildId = message.guildId) {
   const id = String(idInput ?? '').trim().replaceAll('`', '').toUpperCase();
   if (!id) {
     await privateResponse(message, t('hostManageUsage', {}, message.guildId));
     return;
   }
-  const event = message.guildId ? findGuildEvent(id, message.guildId) : allEvents().find((item) => item.id === id) ?? null;
-  if (!event || !event.messageId) {
+  const event = guildId
+    ? findGuildEvent(id, guildId)
+    : findUniqueEventById(allEvents(), id);
+  if (!event) {
+    await privateResponse(message, t('noEvent', {}, message.guildId ?? null));
+    return;
+  }
+  // In DMs, verify community membership before revealing event-specific information.
+  if (!message.guildId && !(await isUserMemberInGuild(event.guildId, message.author.id))) {
+    await privateResponse(message, t('noEvent', {}, null));
+    return;
+  }
+  if (!event.messageId) {
     await privateResponse(message, t('noEvent', {}, message.guildId ?? null));
     return;
   }
   const requesterIsAdmin = Boolean(message.guildId && event.creatorId !== message.author.id && await isServerAdmin(message));
-  const permitted = canManageEvent(event, { userId: message.author.id, guildId: message.guildId ?? null, isAdmin: requesterIsAdmin });
+  const permitted = canManageEvent(event, { userId: message.author.id, guildId: message.guildId ? guildId : null, isAdmin: requesterIsAdmin });
   if (!permitted) {
     await privateResponse(message, t('onlyCreatorManage', {}, event.guildId));
     return;
@@ -1294,6 +1869,9 @@ async function startEventManagement(message, idInput) {
     hostManageSessions.set(message.author.id, {
       eventId: event.id,
       guildId: event.guildId,
+      authorizationMode: message.guildId && String(event.creatorId) !== String(message.author.id)
+        ? 'server-admin'
+        : 'host',
       step: 'menu',
       expiresAt: Date.now() + SETUP_SESSION_TTL_MS,
     });
@@ -1331,6 +1909,28 @@ async function handleHostManageInput(message, rawInput) {
     await message.author.send(t('noEvent', {}, session.guildId));
     return;
   }
+
+  // Management sessions live in DMs, so permissions must not be trusted from
+  // the initial command. Verify membership on every reply and re-check admin
+  // rights when a non-host opened the menu from a server channel.
+  const isMember = await isUserMemberInGuild(session.guildId, message.author.id);
+  const isAdmin = session.authorizationMode === 'server-admin'
+    ? await isUserAdminInGuild(session.guildId, message.author.id)
+    : false;
+  if (!canContinueEventManagementSession(event, {
+    userId: message.author.id,
+    isMember,
+    authorizationMode: session.authorizationMode,
+    isAdmin,
+  })) {
+    hostManageSessions.delete(message.author.id);
+    if (!isMember) clearDmGuildContext(dmGuildContexts, message.author.id);
+    await message.author.send(isMember
+      ? t('onlyCreatorManage', {}, session.guildId)
+      : t('dmServerNotMember', { guild: session.guildId }, session.guildId));
+    return;
+  }
+
   if (['cancelled', 'completed', 'skipped'].includes(event.status)) {
     hostManageSessions.delete(message.author.id);
     await message.author.send(t('hostManageClosedEvent', {}, event.guildId));
@@ -1686,8 +2286,11 @@ function renderEventDetails(event, userId) {
   const state = event.status === 'cancelled' ? t('cancelledTag', {}, guildId)
     : event.status === 'in_progress' ? t('inProgressTag', {}, guildId)
       : event.status === 'completed' ? t('completedTag', {}, guildId) : null;
+  const guild = client.guilds.get(guildId);
   const lines = [
     `🎉 **${event.title}**${state ? ` · ${state}` : ''}`,
+    `🏠 **${t('dmCommunityLabel', {}, guildId)}:** ${guild?.name ?? guildId}`,
+    `📣 **${t('dmChannelLabel', {}, guildId)}:** <#${event.channelId}>`,
     `🆔 **ID:** \`${event.id}\``,
     formatPersonalTime(event, userId),
     `👤 ${t('host', {}, guildId)}: ${event.creatorName}`,

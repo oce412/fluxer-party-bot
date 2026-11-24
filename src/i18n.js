@@ -6,13 +6,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const localesDirectory = resolve(here, '..', 'lang');
 const localeCache = new Map();
 const locales = readdirSync(localesDirectory).filter((name) => name.endsWith('.lang')).map((name) => name.slice(0, -5)).sort();
+const localeSet = new Set(locales);
 
 export function availableLocales() {
   return [...locales];
 }
 
 export function hasLocale(language) {
-  return locales.includes(String(language ?? '').trim().toLowerCase());
+  return localeSet.has(String(language ?? '').trim().toLowerCase());
 }
 
 function decodeValue(value) {
@@ -49,7 +50,7 @@ export function loadLocale(language) {
 
 export function translate(language, key, values = {}) {
   const selected = loadLocale(language);
-  const fallback = language === 'ru' ? loadLocale('en') : loadLocale('ru');
+  const fallback = language === 'en' ? loadLocale('ru') : loadLocale('en');
   let output = selected.get(key) ?? fallback.get(key) ?? key;
   for (const [name, value] of Object.entries(values)) output = output.replaceAll(`{${name}}`, String(value));
   return output;
