@@ -41,6 +41,8 @@ The bot may send direct messages to a member when that member RSVPs or when they
 
 Event information is retained until **[document the actual retention period and event-history cleanup policy]**. Database backups are retained for **[number of days]**. Operational logs are retained for **[number of days]**. When the bot is removed from a server, **[describe the current deletion workflow and target completion window; do not promise automated deletion unless it is implemented]**.
 
+**Implementation note (24 November 2026):** the current application code does not implement automatic event retention cleanup or a server-removal deletion job. Event records and server settings remain in PostgreSQL until the operator removes them through database maintenance. Do not publish a shorter retention period or promise automatic deletion until that functionality and operational process exist.
+
 For access or deletion requests, contact **[privacy contact]** and identify the server and event concerned. Requests will be verified and handled under applicable law. A server administrator may be asked to verify authority for server-level data requests.
 
 ## Security
