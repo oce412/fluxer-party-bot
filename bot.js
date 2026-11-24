@@ -1,5 +1,5 @@
 import { Client, Events, PermissionFlags } from '@fluxerjs/core';
-import { canContinueEventManagementSession, canManageEvent, findGuildScopedEvent } from './src/authz.js';
+import { canContinueEventManagementSession, canManageEvent, findGuildScopedEvent, findUniqueEventById } from './src/authz.js';
 import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, fetchGuildMemberSafely, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
 import { getEventAttendees, getUpcomingEvents } from './src/event-list.js';
 import { startHealthServer } from './src/health.js';
@@ -316,7 +316,8 @@ client.on(Events.MessageCreate, async (message) => {
         clearDmGuildContext(dmGuildContexts, message.author.id);
         await message.author.send(t('createWizardCancelled', {}, null));
       } else if (command === 'manage') {
-        await selectDmGuild(message, command, tail);
+        // Event IDs are globally unique. Resolve directly, then authorize against the event's community.
+        await startEventManagement(message, tail, null);
       } else if (['cancel', 'отмена', 'стоп'].includes(command) && hostManageSessions.has(message.author.id)) {
         hostManageSessions.delete(message.author.id);
         await message.author.send(t('hostManageClosed', {}, null));
@@ -1148,6 +1149,13 @@ async function startEventCreationWizard(message, guildId) {
     return;
   }
 
+  let guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  if (!guild && typeof client.guilds?.fetch === 'function') {
+    guild = await client.guilds.fetch(guildId).catch(() => null);
+  }
+  const communityName = String(guild?.name ?? guildId);
+
   setupSessions.delete(message.author.id);
   hostManageSessions.delete(message.author.id);
   dmGuildSelectionSessions.delete(message.author.id);
@@ -1155,6 +1163,7 @@ async function startEventCreationWizard(message, guildId) {
 
   const session = {
     guildId,
+    communityName,
     steps: [...EVENT_CREATE_STEPS],
     stepIndex: 0,
     values: {
@@ -1173,7 +1182,7 @@ async function startEventCreationWizard(message, guildId) {
   eventCreateSessions.set(message.author.id, session);
 
   try {
-    await message.author.send(t('createWizardIntro', {}, guildId));
+    await message.author.send(t('createWizardIntro', { community: communityName, guildId }, guildId));
     await promptEventCreateWizardStep(message.author, session);
     if (message.guildId) await tryDeleteCommand(message);
   } catch (error) {
@@ -1226,6 +1235,8 @@ async function promptEventCreateWizardStep(user, session) {
       ? `${values.recurrence.frequency}:${values.recurrence.count}`
       : t('createWizardOnce', {}, guildId);
     const preview = t('createWizardPreview', {
+      community: session.communityName ?? guildId,
+      guildId,
       title: values.title,
       when: zonedStart.isValid ? formatShortDateTime(zonedStart, guildId) : values.dateTime,
       zone: values.timeZone,
@@ -1280,7 +1291,7 @@ async function handleEventCreateWizardAnswer(message, rawInput) {
     return;
   }
 
-  const skip = ['', 'skip', 'default', 'по умолчанию', 'пропустить'].includes(normalized);
+  const skip = ['', 'skip', 'default', 'по умолчанию', 'пропустить', 'server', 'community', 'guild', 'сервер', 'сообщество'].includes(normalized);
 
   if (step === 'dateTime') {
     const dateTime = normalizeLocalDateTimeInput(input);
@@ -1801,8 +1812,19 @@ async function startEventManagement(message, idInput, guildId = message.guildId)
     await privateResponse(message, t('hostManageUsage', {}, message.guildId));
     return;
   }
-  const event = guildId ? findGuildEvent(id, guildId) : allEvents().find((item) => item.id === id) ?? null;
-  if (!event || !event.messageId) {
+  const event = guildId
+    ? findGuildEvent(id, guildId)
+    : findUniqueEventById(allEvents(), id);
+  if (!event) {
+    await privateResponse(message, t('noEvent', {}, message.guildId ?? null));
+    return;
+  }
+  // In DMs, verify community membership before revealing event-specific information.
+  if (!message.guildId && !(await isUserMemberInGuild(event.guildId, message.author.id))) {
+    await privateResponse(message, t('noEvent', {}, null));
+    return;
+  }
+  if (!event.messageId) {
     await privateResponse(message, t('noEvent', {}, message.guildId ?? null));
     return;
   }

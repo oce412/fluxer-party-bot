@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canContinueEventManagementSession, canManageEvent, findGuildScopedEvent } from '../src/authz.js';
+import { canContinueEventManagementSession, canManageEvent, findGuildScopedEvent, findUniqueEventById } from '../src/authz.js';
 
 const events = [
   { id: 'ABC12345', guildId: 'server-a', creatorId: 'host-a' },
@@ -75,4 +75,18 @@ test('unknown management-session authorization modes fail closed', () => {
     isMember: true,
     authorizationMode: 'unknown',
   }), false);
+});
+
+test('DM event lookup resolves a unique ID without requiring a community selection', () => {
+  const distinct = [
+    { id: 'ABC12345', guildId: 'server-a', creatorId: 'host-a' },
+    { id: 'XYZ67890', guildId: 'server-b', creatorId: 'host-b' },
+  ];
+  assert.equal(findUniqueEventById(distinct, 'xyz67890'), distinct[1]);
+  assert.equal(findUniqueEventById(distinct, 'missing'), null);
+  assert.equal(findUniqueEventById(distinct, ''), null);
+});
+
+test('DM event lookup fails closed if corrupted legacy data has duplicate IDs', () => {
+  assert.equal(findUniqueEventById(events, 'ABC12345'), null);
 });

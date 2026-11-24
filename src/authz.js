@@ -1,3 +1,14 @@
+/**
+ * Resolve a globally unique event ID without requiring a DM community picker.
+ * If legacy/corrupt data contains duplicates, fail closed rather than guess.
+ */
+export function findUniqueEventById(events, eventId) {
+  const normalizedId = String(eventId ?? '').trim().replaceAll(String.fromCharCode(96), '').toUpperCase();
+  if (!normalizedId || !Array.isArray(events)) return null;
+  const matches = events.filter((event) => String(event?.id ?? '').toUpperCase() === normalizedId);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /** Resolve an event ID only inside the caller's server boundary. */
 export function findGuildScopedEvent(events, eventId, guildId) {
   const normalizedId = String(eventId ?? '').trim().replaceAll('`', '').toUpperCase();

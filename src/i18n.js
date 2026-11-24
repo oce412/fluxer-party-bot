@@ -49,7 +49,7 @@ export function loadLocale(language) {
 
 export function translate(language, key, values = {}) {
   const selected = loadLocale(language);
-  const fallback = language === 'ru' ? loadLocale('en') : loadLocale('ru');
+  const fallback = language === 'en' ? loadLocale('ru') : loadLocale('en');
   let output = selected.get(key) ?? fallback.get(key) ?? key;
   for (const [name, value] of Object.entries(values)) output = output.replaceAll(`{${name}}`, String(value));
   return output;
