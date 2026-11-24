@@ -1143,7 +1143,7 @@ async function languageSupportCommand(message, rawArguments, guildId) {
         ? metadata.contributors.join(', ')
         : t('languageCreditsNoContributors', {}, guildId);
       return t('languageCreditsEntry', { language, contributors }, guildId);
-    }).join('\\n');
+    }).join('\n');
     await privateResponse(message, t('languageCredits', { entries }, guildId));
     return;
   }
