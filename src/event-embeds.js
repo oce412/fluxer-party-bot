@@ -89,9 +89,9 @@ export function buildEventAnnouncementEmbed(event, {
   const statusSuffix = event?.status && event.status !== 'scheduled' && statusLabel ? ` · ${statusLabel}` : '';
   const description = String(event?.description ?? '').trim();
   const fields = [
-    { name: `📅 ${text(whenLabel, 'When', 248)}`, value: text(when ?? event?.startsAt), inline: false },
-    { name: `👥 ${text(attendeesLabel, 'Attending', 248)}`, value: attendanceSummary(event, attendees, noLimitLabel, maybeLabel), inline: true },
-    { name: `⏱️ ${text(durationLabel, 'Duration', 248)}`, value: text(duration, '—'), inline: true },
+    { name: text(whenLabel, '📅 When', 256), value: text(when ?? event?.startsAt), inline: false },
+    { name: text(attendeesLabel, '👥 Attending', 256), value: attendanceSummary(event, attendees, noLimitLabel, maybeLabel), inline: true },
+    { name: text(durationLabel, '⏱️ Duration', 256), value: text(duration, '—'), inline: true },
   ];
 
   return fitEmbed({
@@ -117,29 +117,29 @@ export function buildEventDetailsEmbed(event, {
 } = {}) {
   const attendees = attendeesOf(event);
   const metadata = [
-    `🏠 ${text(communityName)}`,
-    `📣 ${text(channelMention)}`,
+    `🏠 **${text(labels.community, 'Community', 80)}:** ${text(communityName)}`,
+    `📣 **${text(labels.announcements, 'Announcements', 80)}:** ${text(channelMention)}`,
   ].join('  ·  ');
   const description = [
     String(event?.description ?? '').trim(),
     metadata,
   ].filter(Boolean).join('\n\n');
   const fields = [
-    { name: `📅 ${text(labels.when, 'When', 248)}`, value: text(when ?? event?.startsAt), inline: false },
-    { name: `👤 ${text(labels.host, 'Host', 248)}`, value: text(event?.creatorName, 'Unknown'), inline: true },
-    { name: `📊 ${text(labels.attendees, 'Attending', 248)}`, value: attendanceSummary(event, attendees, noLimitLabel, maybeLabel), inline: true },
-    { name: `⏱️ ${text(labels.duration, 'Duration', 248)}`, value: text(duration), inline: true },
+    { name: text(labels.when, '📅 When', 256), value: text(when ?? event?.startsAt), inline: false },
+    { name: text(labels.host, '👤 Host', 256), value: text(event?.creatorName, 'Unknown'), inline: true },
+    { name: text(labels.attendees, '👥 Attending', 256), value: attendanceSummary(event, attendees, noLimitLabel, maybeLabel), inline: true },
+    { name: text(labels.duration, '⏱️ Duration', 256), value: text(duration), inline: true },
   ];
   if (labels.status && labels.statusValue) {
     fields.splice(1, 0, {
-      name: `◈ ${text(labels.status, 'Status', 248)}`,
+      name: text(labels.status, '◈ Status', 256),
       value: text(labels.statusValue),
       inline: true,
     });
   }
   fields.push(
-    { name: `✅ ${text(labels.attendingNames, 'Attending members', 248)}`, value: attendeeNames(attendees, 'yes'), inline: true },
-    { name: `🤔 ${text(labels.maybeNames, 'Maybe members', 248)}`, value: attendeeNames(attendees, 'maybe'), inline: true },
+    { name: text(labels.attendingNames, '✅ Attending members', 256), value: attendeeNames(attendees, 'yes'), inline: true },
+    { name: text(labels.maybeNames, '🤔 Maybe members', 256), value: attendeeNames(attendees, 'maybe'), inline: true },
   );
 
   return fitEmbed({
@@ -186,8 +186,8 @@ export function buildUpcomingEventsEmbed(events, {
   return fitEmbed({
     title: `🗓️ ${text(labels.title, 'Upcoming events', 248)}`,
     description: [
-      `🏠 ${text(communityName)}`,
-      `📣 ${text(channelMention)}`,
+      `🏠 **${text(labels.community, 'Community', 80)}:** ${text(communityName)}`,
+      `📣 **${text(labels.announcements, 'Announcements', 80)}:** ${text(channelMention)}`,
     ].join('  ·  '),
     color: EVENT_COLORS.scheduled,
     fields,
