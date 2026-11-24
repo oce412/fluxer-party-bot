@@ -70,6 +70,7 @@ noChannelConfigured=This server is not configured yet. Ask an administrator to r
 createFailed=I could not publish the event. Check that the announcement channel is available and the bot can send messages and add reactions.
 createdOne=✅ Created **{title}**. Event ID: `{id}`.\n{when}
 createdMany=✅ Created a series of **{count}** events for **{title}**. Only the next occurrence is announced for now. ID: `{id}`.\n{when}
+createdInCommunity=Community: **{community}** (ID: `{guildId}`) · Announcements: {channel}.
 createNote=Members can react ✅ / 🤔 / ❌ under the announcement to change their RSVP.
 noUpcoming=There are no upcoming published events right now.
 upcomingTitle=**Upcoming events**

@@ -1560,10 +1560,17 @@ async function publishEventSeries(message, guildId, {
   const confirmation = recurrence.count > 1
     ? t('createdMany', { count: recurrence.count, title, id: first.id, when: timeLabel }, guildId)
     : t('createdOne', { title, id: first.id, when: timeLabel }, guildId);
+  const community = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  const destination = t('createdInCommunity', {
+    community: community?.name ?? guildId,
+    guildId,
+    channel: `<#${config.announcementChannelId}>`,
+  }, guildId);
   const manageHint = t('hostManageCommandHint', { id: first.id, command: manageCommandForGuild(guildId) }, guildId);
   const durationNote = durationWasDefaulted ? `\n\n${t('createDurationDefaulted', { duration: durationMinutes }, guildId)}` : '';
   const startNoticeNote = notifyOnStart ? `\n${t('createStartNoticeEnabled', {}, guildId)}` : '';
-  const delivered = await privateResponse(message, `${confirmation}\n\n${t('createNote', {}, guildId)}${durationNote}${startNoticeNote}\n\n${manageHint}`);
+  const delivered = await privateResponse(message, `${confirmation}\n${destination}\n\n${t('createNote', {}, guildId)}${durationNote}${startNoticeNote}\n\n${manageHint}`);
   if (delivered) setupSessions.delete(message.author.id);
 }
 
