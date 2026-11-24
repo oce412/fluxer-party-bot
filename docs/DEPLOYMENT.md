@@ -86,13 +86,12 @@ After deployment:
 
 1. Confirm `/healthz` reports the intended version and exact source revision (not `unknown`).
 2. Create a **new test event** and check its announcement and DM `!event info ID` output. New posts use embeds immediately. Existing announcements are not bulk-converted at startup; they are refreshed to embeds after an RSVP or host edit/status change.
-2. Confirm the bot logs in as the expected bot identity.
-3. Confirm `/readyz` returns HTTP 200.
-3. In a test community, run `!event setup`, create an event, RSVP yes/maybe/no, and use host controls to edit and cancel it.
-4. Repeat with a bot role that has Embed Links and with a test role that does not; verify rich embed and text fallback respectively.
-5. Verify DMs, community switching, English/Russian locale, and time-zone rendering.
-6. Confirm scheduled reminders/notifications are event-triggered and only sent to the host and relevant attendees.
-7. Verify PostgreSQL backup and restore from the deployed release.
+3. Confirm the bot logs in as the expected bot identity and `/readyz` returns HTTP 200.
+4. In a test community, run `!event setup`, create an event, RSVP yes/maybe/no, and use host controls to edit and cancel it.
+5. Repeat with a bot role that has Embed Links and with a test role that does not; verify rich embed and text fallback respectively.
+6. Verify DMs, community switching, English/Russian locale, and time-zone rendering.
+7. Confirm scheduled reminders/notifications are event-triggered and only sent to the host and relevant attendees.
+8. Verify PostgreSQL backup and restore from the deployed release.
 
 ## Public launch gate
 
