@@ -26,6 +26,7 @@ Recommended values:
 | Variable | Purpose |
 |---|---|
 | `EXPECTED_BOT_USER_ID` | Prevents accidentally starting with a token for another bot |
+| `BUILD_REVISION` | Git commit SHA reported by `GET /healthz`; can be set as a runtime environment variable |
 | `FLUXER_APPLICATION_ID` | Used by `npm run invite` to generate the OAuth2 invite |
 | `BOT_LANGUAGE=en` | Fallback language for unconfigured communities |
 | `EVENT_DEFAULT_TIME_ZONE=UTC` | Default event time zone |
@@ -40,9 +41,9 @@ Use a production PostgreSQL connection with least-privilege access. Keep `DATABA
 
 ## Container deployment
 
-The repository Dockerfile uses Node.js 24, installs locked production dependencies with `npm ci --omit=dev`, runs as the unprivileged `node` user, and copies only runtime files.
+The repository Dockerfile uses Node.js 24, installs locked production dependencies with `npm ci --omit=dev`, runs as the unprivileged `node` user, and copies only runtime files. It accepts `--build-arg BUILD_REVISION=<git-sha>` and exposes that marker through `/healthz`. Set the same value as a runtime `BUILD_REVISION` environment variable when building outside GitHub Actions.
 
-The container entrypoint refuses startup unless `APP_ENV=production`, `FLUXER_BOT_TOKEN`, and `DATABASE_URL` are present. It runs database migrations before starting the bot. Deploy the image produced by the trusted master/tag workflow and pin the deployed image to an immutable digest where the hosting platform supports it.
+The container entrypoint refuses startup unless `APP_ENV=production`, `FLUXER_BOT_TOKEN`, and `DATABASE_URL` are present. It runs database migrations before starting the bot. Deploy the image produced by the trusted master/tag workflow and pin the deployed image to an immutable digest where the hosting platform supports it. Pull-request Docker builds are validation-only and do not publish an image. Feature branches are not published by the current workflow; when testing a feature branch on FluxerHost, build from the exact branch/commit or ask the host operator to update the project to that revision.
 
 Persistent event and settings data is in PostgreSQL. The local `DATA_DIR` is used for legacy JSON import/backup-related files; do not rely on the container's writable layer as durable storage.
 
@@ -63,8 +64,10 @@ Provide the same production variables through the host's secret/environment mana
 
 When `HEALTH_PORT` or `PORT` is set, the bot serves:
 
-- `GET /healthz` — process health.
-- `GET /readyz` — readiness, including Fluxer gateway and storage health.
+- `GET /healthz` — process health, package version and source revision.
+- `GET /readyz` — readiness, including Fluxer gateway and storage health, plus the same version/revision marker.
+
+For the v0.9.1 beta branch, the expected source revision is `f0843eb7e5f2d96e2b1b0d80edf0448a14d18f62`. Compare the `revision` returned by `/healthz` with the commit actually deployed; `unknown` means the host has not been configured to pass the build revision through.
 
 The Docker health check uses `/readyz`. Keep the health port reachable by your platform's health checker but do not expose an unnecessary management surface to the public internet.
 
@@ -81,8 +84,9 @@ The Docker health check uses `/readyz`. Keep the health port reachable by your p
 
 After deployment:
 
-1. Confirm the bot logs in as the expected bot identity.
-2. Confirm `/readyz` returns HTTP 200.
+1. Confirm `/healthz` reports the intended version and exact source revision (not `unknown`).
+2. Confirm the bot logs in as the expected bot identity.
+3. Confirm `/readyz` returns HTTP 200.
 3. In a test community, run `!event setup`, create an event, RSVP yes/maybe/no, and use host controls to edit and cancel it.
 4. Repeat with a bot role that has Embed Links and with a test role that does not; verify rich embed and text fallback respectively.
 5. Verify DMs, community switching, English/Russian locale, and time-zone rendering.
