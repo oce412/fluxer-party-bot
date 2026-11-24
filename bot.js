@@ -2399,12 +2399,16 @@ async function runWeeklyMarkiplierClipCheck() {
   if (!guildId) return;
 
   const settings = getGuildSettings(guildId);
+  const weekKey = DateTime.utc().toFormat("kkkk-'W'WW");
   if (settings.markiplierClipPendingUrl) {
+    // A previous week's pending clip takes priority; consume the current week
+    // too, so a delayed retry cannot be followed by a second clip that week.
+    if (settings.markiplierClipWeek !== weekKey) {
+      await updateGuildSettings(guildId, { markiplierClipWeek: weekKey });
+    }
     await deliverPendingMarkiplierClip(channel, guildId, settings.markiplierClipPendingUrl);
     return;
   }
-
-  const weekKey = DateTime.utc().toFormat("kkkk-'W'WW");
   if (settings.markiplierClipWeek === weekKey) return;
 
   const selectedUrl = rollWeeklyMarkiplierClip(MARKIPLIER_CLIP_URLS);
