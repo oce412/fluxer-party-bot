@@ -1,0 +1,93 @@
+# Production deployment runbook
+
+## Before deploying
+
+1. Create a dedicated production Fluxer application and bot token. Do not reuse development credentials.
+2. Create a dedicated PostgreSQL database/user for this bot. Do not point development and production at the same database.
+3. Restrict database network access to the application host. Enable TLS and keep certificate verification enabled.
+4. Store all credentials in the hosting platform's runtime secret manager. Never commit `.env.production`, tokens, or database passwords.
+5. Set the production bot role to the permissions documented in [INVITE_PERMISSIONS.md](INVITE_PERMISSIONS.md). Do not grant Administrator.
+
+## Required production environment
+
+Use `.env.production.example` as the source of truth. Required values:
+
+| Variable | Purpose |
+|---|---|
+| `APP_ENV=production` | Activates production safeguards and container entrypoint |
+| `FLUXER_BOT_TOKEN` | Runtime bot token secret |
+| `DATABASE_URL` | Dedicated PostgreSQL connection string |
+| `DATABASE_SSL=true` | Enables TLS for PostgreSQL |
+| `DATABASE_SSL_REJECT_UNAUTHORIZED=true` | Verifies the database server certificate |
+
+Recommended values:
+
+| Variable | Purpose |
+|---|---|
+| `EXPECTED_BOT_USER_ID` | Prevents accidentally starting with a token for another bot |
+| `FLUXER_APPLICATION_ID` | Used by `npm run invite` to generate the OAuth2 invite |
+| `BOT_LANGUAGE=en` | Fallback language for unconfigured communities |
+| `EVENT_DEFAULT_TIME_ZONE=UTC` | Default event time zone |
+| `DATA_DIR=data-production` | Local data/import directory |
+| `DATABASE_POOL_MAX=5` | PostgreSQL pool size; code clamps it to 1–20 |
+| `LOG_LEVEL=info` | Structured application log level |
+| `HEALTH_PORT` or `PORT` | Optional health/readiness listener |
+| `LANGUAGE_REQUEST_FORM_URL` | Optional HTTPS language-request form |
+| `LANGUAGE_SUBMISSION_FORM_URL` | Optional HTTPS translation-submission form |
+
+Use a production PostgreSQL connection with least-privilege access. Keep `DATABASE_SSL_REJECT_UNAUTHORIZED=true`; do not disable certificate checks to make an invalid TLS configuration work.
+
+## Container deployment
+
+The repository Dockerfile uses Node.js 24, installs locked production dependencies with `npm ci --omit=dev`, runs as the unprivileged `node` user, and copies only runtime files.
+
+The container entrypoint refuses startup unless `APP_ENV=production`, `FLUXER_BOT_TOKEN`, and `DATABASE_URL` are present. It runs database migrations before starting the bot. Deploy the image produced by the trusted master/tag workflow and pin the deployed image to an immutable digest where the hosting platform supports it.
+
+Persistent event and settings data is in PostgreSQL. The local `DATA_DIR` is used for legacy JSON import/backup-related files; do not rely on the container's writable layer as durable storage.
+
+## Non-container deployment
+
+On a host with Node.js 24:
+
+```sh
+npm ci
+npm run check
+npm test
+npm run start:prod
+```
+
+Provide the same production variables through the host's secret/environment manager. Startup applies migrations through store initialization. For an explicit migration run, use `npm run db:migrate` with the production environment loaded.
+
+## Health and readiness
+
+When `HEALTH_PORT` or `PORT` is set, the bot serves:
+
+- `GET /healthz` — process health.
+- `GET /readyz` — readiness, including Fluxer gateway and storage health.
+
+The Docker health check uses `/readyz`. Keep the health port reachable by your platform's health checker but do not expose an unnecessary management surface to the public internet.
+
+## Backups, retention and recovery
+
+- Schedule `npm run db:backup` from a trusted host with the required PostgreSQL tools and credentials.
+- Store backups encrypted, separately from the production database, with access restricted to operators who need restore capability.
+- Define the backup retention period in the hosting/backup system; the application does not enforce it.
+- Regularly test restoring a backup into a separate database. A backup that has not been restored in a test is not a verified recovery plan.
+- Database migrations are additive and transactional; take a verified backup before deploying a release that changes schema.
+- Keep the prior immutable application image available so the application process can be rolled back. If a migration has already run, confirm backward compatibility before rolling back the application; restore the database only using a documented recovery decision.
+
+## Release verification
+
+After deployment:
+
+1. Confirm the bot logs in as the expected bot identity.
+2. Confirm `/readyz` returns HTTP 200.
+3. In a test community, run `!event setup`, create an event, RSVP yes/maybe/no, and use host controls to edit and cancel it.
+4. Repeat with a bot role that has Embed Links and with a test role that does not; verify rich embed and text fallback respectively.
+5. Verify DMs, community switching, English/Russian locale, and time-zone rendering.
+6. Confirm scheduled reminders/notifications are event-triggered and only sent to the host and relevant attendees.
+7. Verify PostgreSQL backup and restore from the deployed release.
+
+## Public launch gate
+
+Do not treat a healthy container as proof that the service is ready for broad public use. Before listing, complete the privacy policy, name a privacy/support contact, identify hosting and subprocessors/regions, publish retention and deletion procedures, and verify the production bot invite against the current Fluxer permissions documentation.
