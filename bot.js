@@ -2298,10 +2298,11 @@ function isEmbedPermissionError(error) {
   const candidates = [error, error?.cause].filter(Boolean);
   return candidates.some((candidate) => {
     const code = String(candidate.code ?? '').toUpperCase();
-    return ['MISSING_PERMISSIONS', 'MISSING_PERMISSION', 'MISSING_ACCESS'].includes(code)
-      || candidate.statusCode === 403
-      || candidate.status === 403
-      || /embed.{0,30}permission|permission.{0,30}embed/i.test(String(candidate.message ?? ''));
+    // A generic 403/MISSING_ACCESS can also mean the bot cannot see or send
+    // to the channel; only fall back for a permission failure or explicit
+    // Embed Links wording, not for unrelated channel-access errors.
+    return ['MISSING_PERMISSIONS', 'MISSING_PERMISSION'].includes(code)
+      || /embed.{0,30}permission|permission.{0,30}embed|EMBED_LINKS/i.test(String(candidate.message ?? ''));
   });
 }
 
