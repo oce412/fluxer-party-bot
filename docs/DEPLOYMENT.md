@@ -85,6 +85,7 @@ The Docker health check uses `/readyz`. Keep the health port reachable by your p
 After deployment:
 
 1. Confirm `/healthz` reports the intended version and exact source revision (not `unknown`).
+2. Create a **new test event** and check its announcement and DM `!event info ID` output. New posts use embeds immediately. Existing announcements are not bulk-converted at startup; they are refreshed to embeds after an RSVP or host edit/status change.
 2. Confirm the bot logs in as the expected bot identity.
 3. Confirm `/readyz` returns HTTP 200.
 3. In a test community, run `!event setup`, create an event, RSVP yes/maybe/no, and use host controls to edit and cancel it.
