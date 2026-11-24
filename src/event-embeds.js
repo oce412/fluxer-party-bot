@@ -43,6 +43,10 @@ function statusColor(status) {
   return EVENT_COLORS[status] ?? EVENT_COLORS.scheduled;
 }
 
+function emphasized(value, fallback = '—') {
+  return `**${text(value, fallback, 1020)}**`;
+}
+
 /**
  * Fluxer enforces a 6,000-character aggregate embed budget in addition to
  * per-property limits. Keep a predictable budget for the header and footer,
@@ -52,7 +56,9 @@ function fitEmbed(payload) {
   const title = text(payload.title, 'Event', 256);
   const description = text(payload.description, '', 2048);
   const footerText = text(payload.footer?.text, 'Event', 512);
-  let remaining = 6000 - title.length - description.length - footerText.length;
+  const authorName = payload.author?.name ? text(payload.author.name, '', 256) : '';
+  const author = authorName ? { name: authorName } : undefined;
+  let remaining = 6000 - title.length - description.length - footerText.length - authorName.length;
   const fields = [];
 
   for (const field of (Array.isArray(payload.fields) ? payload.fields : []).slice(0, 25)) {
@@ -69,6 +75,7 @@ function fitEmbed(payload) {
     ...payload,
     title,
     ...(description ? { description } : {}),
+    ...(author ? { author } : {}),
     fields,
     footer: { text: footerText },
   };
@@ -83,18 +90,25 @@ export function buildEventAnnouncementEmbed(event, {
   attendeesLabel = 'Attending',
   durationLabel = 'Duration',
   statusLabel = '',
+  hostLabel = 'Host',
   footer = '',
 } = {}) {
   const attendees = attendeesOf(event);
   const statusSuffix = event?.status && event.status !== 'scheduled' && statusLabel ? ` · ${statusLabel}` : '';
   const description = String(event?.description ?? '').trim();
   const fields = [
-    { name: text(whenLabel, '📅 When', 256), value: text(when ?? event?.startsAt), inline: false },
-    { name: text(attendeesLabel, '👥 Attending', 256), value: attendanceSummary(event, attendees, noLimitLabel, maybeLabel), inline: true },
-    { name: text(durationLabel, '⏱️ Duration', 256), value: text(duration, '—'), inline: true },
+    { name: text(whenLabel, '📅 When', 256), value: emphasized(when ?? event?.startsAt), inline: false },
+    { name: text(attendeesLabel, '👥 Attending', 256), value: emphasized(attendanceSummary(event, attendees, noLimitLabel, maybeLabel)), inline: true },
+    { name: text(durationLabel, '⏱️ Duration', 256), value: emphasized(duration), inline: true },
   ];
 
+  const creatorName = String(event?.creatorName ?? '').trim();
+  const authorName = creatorName
+    ? `${text(hostLabel, 'Host', 80)} · ${text(creatorName, 'Unknown', 160)}`
+    : '';
+
   return fitEmbed({
+    ...(authorName ? { author: { name: authorName } } : {}),
     title: text(`🎉 ${event?.title ?? 'Untitled event'}${statusSuffix}`, '🎉 Event', 256),
     ...(description ? { description } : {}),
     color: statusColor(event?.status),
