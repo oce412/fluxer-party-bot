@@ -1,3 +1,4 @@
+import packageJson from '../package.json' with { type: 'json' };
 import { createServer } from 'node:http';
 
 function sendJson(response, statusCode, body) {
@@ -9,6 +10,8 @@ function sendJson(response, statusCode, body) {
   });
   response.end(payload);
 }
+
+const buildRevision = String(process.env.BUILD_REVISION ?? 'unknown').trim().slice(0, 40) || 'unknown';
 
 export async function startHealthServer({ port = null, host = '0.0.0.0', isReady = async () => false } = {}) {
   if (port === null || port === undefined || String(port).trim() === '') return null;
@@ -26,12 +29,21 @@ export async function startHealthServer({ port = null, host = '0.0.0.0', isReady
       return;
     }
     if (pathname === '/healthz') {
-      sendJson(response, 200, { status: 'ok', service: 'fluxer-party-events-bot' });
+      sendJson(response, 200, {
+        status: 'ok',
+        service: 'fluxer-party-events-bot',
+        version: packageJson.version,
+        revision: buildRevision,
+      });
       return;
     }
     try {
       const ready = await isReady();
-      sendJson(response, ready ? 200 : 503, { status: ready ? 'ready' : 'not_ready' });
+      sendJson(response, ready ? 200 : 503, {
+        status: ready ? 'ready' : 'not_ready',
+        version: packageJson.version,
+        revision: buildRevision,
+      });
     } catch {
       sendJson(response, 503, { status: 'not_ready' });
     }
