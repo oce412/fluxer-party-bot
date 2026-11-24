@@ -54,6 +54,7 @@ See [Invite permissions](INVITE_PERMISSIONS.md). Existing installations must be 
 This is an implementation summary, not a substitute for the final privacy policy.
 
 - Fluxer delivers message events to the bot. The bot inspects supported `!event` command messages and wizard replies in memory; arbitrary conversation messages are not stored by the application.
+- When a member uses DM commands or switches communities, the bot checks that member's membership in communities where it is installed to find valid choices. It does not enumerate, archive, or export full community member lists.
 - Stored records include server IDs and settings; event titles, descriptions, dates, time zones, duration, recurrence, host IDs/display names, channel/message IDs and status; RSVP user IDs, usernames/display names and RSVP status; reminder/notification delivery state; and member time-zone preferences.
 - Operational logs are structured JSON and may contain event/server/channel IDs, error messages, counts and service health. Token-like strings, secret fields, and common database connection strings are redacted. The logger does not intentionally log arbitrary message content or attendee lists.
 - The bot sends event-related DMs to hosts and members who RSVP yes/maybe for reminders or explicitly enabled start notifications. If delivery fails, it can post a fallback notice in the event channel and mention only the intended recipients. It does not send promotional broadcasts.
