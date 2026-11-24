@@ -18,6 +18,14 @@
 - Fall back to the server duration for malformed or out-of-range optional duration input.
 - Return the original event-creation command when validation fails.
 
+## v0.9.1 — Presentation and localization (in development)
+
+- Replace event announcement text cards with localized rich embeds that refresh in place when RSVPs or event status change.
+- Use rich embeds for private event lists and event details in DMs.
+- Append opt-in contributor credits from locale metadata to language-change confirmations, without requiring translated contributor names.
+- Include Fluxer's `EMBED_LINKS` permission in generated minimum and recommended bot invite URLs; keep a text-card fallback for existing installations without that permission.
+- Document the minimum permission set and the optional `MANAGE_MESSAGES` permission without requesting Administrator.
+
 ## v0.9.0 — DM event workflow (in development)
 
 - Add per-user community selection for event commands in DMs, with membership checks before each operation.

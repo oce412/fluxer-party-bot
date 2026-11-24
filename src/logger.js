@@ -6,7 +6,7 @@ const SECRET_KEY = /(token|password|secret|authorization|database.?url|connectio
 function safeValue(value, key = '') {
   if (SECRET_KEY.test(key)) return '[REDACTED]';
   if (value instanceof Error) {
-    return { name: value.name, message: value.message };
+    return { name: safeValue(value.name, 'name'), message: safeValue(value.message, 'message') };
   }
   if (Array.isArray(value)) return value.map((item) => safeValue(item));
   if (value && typeof value === 'object') {
@@ -18,7 +18,7 @@ function safeValue(value, key = '') {
   }
   if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'string') {
-    // Avoid accidentally printing embedded bot-token formats in an error string.
+    // Apply the same credential redaction to plain strings and Error.message values.
     return value
       .replace(/\b\d{15,25}\.[A-Za-z0-9_-]{20,}\b/g, '[REDACTED_TOKEN]')
       .replace(/postgres(?:ql)?:\/\/[^:\s]+:[^@\s]+@[^\s/]+/gi, 'postgresql://[REDACTED]@');

@@ -26,3 +26,24 @@ test('structured logger emits JSON and redacts secret fields and connection URLs
   assert.equal(record.databaseUrl, '[REDACTED]');
   assert.doesNotMatch(JSON.stringify(record), /topsecret|should-not-appear/);
 });
+
+
+test('structured logger redacts credentials embedded in Error messages', () => {
+  const originalWrite = process.stdout.write;
+  const lines = [];
+  process.stdout.write = function capture(chunk) {
+    lines.push(String(chunk));
+    return true;
+  };
+  try {
+    log.warn('request failed', {
+      error: new Error('auth failed for 123456789012345678.abcdEFGHijklMNOPqrstUVWX at postgresql://someone:topsecret@db.example.test/prod'),
+    });
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  assert.equal(lines.length, 1);
+  const record = JSON.parse(lines[0]);
+  assert.match(record.error.message, /REDACTED_TOKEN/);
+  assert.doesNotMatch(JSON.stringify(record), /topsecret|someone:|123456789012345678\\./);
+});
