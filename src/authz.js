@@ -16,3 +16,28 @@ export function canManageEvent(event, { userId, guildId = null, isAdmin = false 
   if (String(event.guildId) !== String(guildId)) return false;
   return String(event.creatorId) === String(userId) || isAdmin === true;
 }
+
+/**
+ * Re-authorize every reply in a DM host-management session.
+ * Membership is mandatory; server-admin sessions additionally require the
+ * administrator permission that originally allowed the non-host to open it.
+ */
+export function canContinueEventManagementSession(event, {
+  userId,
+  isMember = false,
+  authorizationMode,
+  isAdmin = false,
+} = {}) {
+  if (isMember !== true) return false;
+  if (authorizationMode === 'host') {
+    return canManageEvent(event, { userId });
+  }
+  if (authorizationMode === 'server-admin') {
+    return canManageEvent(event, {
+      userId,
+      guildId: event?.guildId ?? null,
+      isAdmin,
+    });
+  }
+  return false;
+}

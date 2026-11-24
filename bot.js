@@ -1,5 +1,5 @@
 import { Client, Events, PermissionFlags } from '@fluxerjs/core';
-import { canManageEvent, findGuildScopedEvent } from './src/authz.js';
+import { canContinueEventManagementSession, canManageEvent, findGuildScopedEvent } from './src/authz.js';
 import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, fetchGuildMemberSafely, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
 import { getEventAttendees, getUpcomingEvents } from './src/event-list.js';
 import { startHealthServer } from './src/health.js';
@@ -1824,6 +1824,9 @@ async function startEventManagement(message, idInput, guildId = message.guildId)
     hostManageSessions.set(message.author.id, {
       eventId: event.id,
       guildId: event.guildId,
+      authorizationMode: message.guildId && String(event.creatorId) !== String(message.author.id)
+        ? 'server-admin'
+        : 'host',
       step: 'menu',
       expiresAt: Date.now() + SETUP_SESSION_TTL_MS,
     });
@@ -1861,6 +1864,28 @@ async function handleHostManageInput(message, rawInput) {
     await message.author.send(t('noEvent', {}, session.guildId));
     return;
   }
+
+  // Management sessions live in DMs, so permissions must not be trusted from
+  // the initial command. Verify membership on every reply and re-check admin
+  // rights when a non-host opened the menu from a server channel.
+  const isMember = await isUserMemberInGuild(session.guildId, message.author.id);
+  const isAdmin = session.authorizationMode === 'server-admin'
+    ? await isUserAdminInGuild(session.guildId, message.author.id)
+    : false;
+  if (!canContinueEventManagementSession(event, {
+    userId: message.author.id,
+    isMember,
+    authorizationMode: session.authorizationMode,
+    isAdmin,
+  })) {
+    hostManageSessions.delete(message.author.id);
+    if (!isMember) clearDmGuildContext(dmGuildContexts, message.author.id);
+    await message.author.send(isMember
+      ? t('onlyCreatorManage', {}, session.guildId)
+      : t('dmServerNotMember', { guild: session.guildId }, session.guildId));
+    return;
+  }
+
   if (['cancelled', 'completed', 'skipped'].includes(event.status)) {
     hostManageSessions.delete(message.author.id);
     await message.author.send(t('hostManageClosedEvent', {}, event.guildId));
