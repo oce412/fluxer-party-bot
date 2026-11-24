@@ -19,6 +19,7 @@ Use `.env.production.example` as the source of truth. Required values:
 | `DATABASE_URL` | Dedicated PostgreSQL connection string |
 | `DATABASE_SSL=true` | Enables TLS for PostgreSQL |
 | `DATABASE_SSL_REJECT_UNAUTHORIZED=true` | Verifies the database server certificate |
+| `DATABASE_SSL_CA` | Optional path to the provider CA certificate for `pg_dump`; otherwise libpq uses its default trusted root certificate path |
 
 Recommended values:
 
@@ -35,7 +36,7 @@ Recommended values:
 | `LANGUAGE_REQUEST_FORM_URL` | Optional HTTPS language-request form |
 | `LANGUAGE_SUBMISSION_FORM_URL` | Optional HTTPS translation-submission form |
 
-Use a production PostgreSQL connection with least-privilege access. Keep `DATABASE_SSL_REJECT_UNAUTHORIZED=true`; do not disable certificate checks to make an invalid TLS configuration work.
+Use a production PostgreSQL connection with least-privilege access. Keep `DATABASE_SSL_REJECT_UNAUTHORIZED=true`; do not disable certificate checks to make an invalid TLS configuration work. The backup script uses the same setting: `verify-full` by default, `require` only when certificate verification is explicitly disabled, and `DATABASE_SSL_CA` when your provider supplies a dedicated CA file.
 
 ## Container deployment
 
