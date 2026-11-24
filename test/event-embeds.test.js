@@ -15,7 +15,7 @@ const event = {
   status: 'scheduled',
   maxAttendees: 12,
   durationMinutes: 120,
-  creatorName: 'Host',
+  creatorName: 'Alex Example',
   attendees: [
     { username: 'Alice', status: 'yes' },
     { username: 'Bob', status: 'yes' },
@@ -34,15 +34,17 @@ test('builds a scheduled announcement embed with localized display fields', () =
     whenLabel: 'Starts',
     attendeesLabel: 'Places',
     durationLabel: 'Length',
+    hostLabel: 'Host',
     footer: 'Event ID: A1B2C3D4',
   });
+  assert.equal(embed.author.name, 'Host · Alex Example');
   assert.equal(embed.title, '🎉 Board Game Night');
   assert.equal(embed.description, 'Bring your favourite game.');
   assert.equal(embed.color, getEventEmbedColor('scheduled'));
   assert.ok(embed.fields[0].name.includes('Starts'));
   assert.ok(embed.fields[1].name.includes('Places'));
   assert.ok(embed.fields[2].name.includes('Length'));
-  assert.equal(embed.fields[1].value, '2/12 · Maybe: 1');
+  assert.equal(embed.fields[1].value, '**2/12 · Maybe: 1**');
   assert.equal(embed.footer.text, 'Event ID: A1B2C3D4');
 });
 
@@ -62,7 +64,7 @@ test('announcement embeds reflect event status and omit an empty description', (
   assert.match(embed.title, /Cancelled/);
   assert.equal(embed.color, getEventEmbedColor('cancelled'));
   assert.equal(Object.hasOwn(embed, 'description'), false);
-  assert.equal(embed.fields[1].value, '0 · no limit');
+  assert.equal(embed.fields[1].value, '**0 · no limit**');
 });
 
 test('builds a DM details embed with community, channel and attendee names', () => {
@@ -183,6 +185,7 @@ test('all generated embed payloads stay within the aggregate Fluxer text budget'
   for (const embed of embeds) {
     const total = (embed.title?.length ?? 0)
       + (embed.description?.length ?? 0)
+      + (embed.author?.name?.length ?? 0)
       + (embed.footer?.text?.length ?? 0)
       + (embed.fields ?? []).reduce((sum, field) => sum + field.name.length + field.value.length, 0);
     assert.ok(total <= 6000, `aggregate embed text was ${total} characters`);
