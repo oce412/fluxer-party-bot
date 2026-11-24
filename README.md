@@ -11,3 +11,11 @@
 - **Rich event presentation:** event announcements, private event lists, and event details use localized embeds. RSVP and status changes update the announcement embed in place; a text fallback keeps older installations working without Embed Links.
 - **Localization credits:** language-change confirmations show opt-in contributor names from the selected `.lang` file's `# Contributor:` metadata. Names are appended verbatim; no per-language translation key is required. See `lang/CONTRIBUTORS.md`.
 - **Invite permissions:** `npm run invite` includes the required Embed Links permission. See `docs/INVITE_PERMISSIONS.md`; existing installations may need to be re-authorized to receive this permission.
+
+## Project documentation
+
+- [Production deployment runbook](docs/DEPLOYMENT.md)
+- [FluxerList listing and privacy disclosure draft](docs/PUBLIC_LISTING.md)
+- [Privacy policy draft — not publishable until completed](docs/PRIVACY_POLICY_DRAFT.md)
+- [Invite permissions](docs/INVITE_PERMISSIONS.md)
+- [Localization contributor credits](lang/CONTRIBUTORS.md)
