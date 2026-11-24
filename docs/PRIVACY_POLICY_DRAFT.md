@@ -1,7 +1,7 @@
 # Privacy Policy — Fluxer Party Events Bot (Draft; not yet publishable)
 
 **Status:** Draft — not the final public privacy policy.
-**Last reviewed:** 20 October 2026
+**Last reviewed:** 24 November 2026
 **Operator:** oce412
 **Contact:** fuckDiscord#6219  
 **Public bot name:** Juke
