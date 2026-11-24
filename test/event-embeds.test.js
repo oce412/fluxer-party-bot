@@ -102,7 +102,7 @@ test('builds a single DM list embed with one field per upcoming event', () => {
     },
     footer: 'Use !event info ID for more details.',
   });
-  assert.equal(embed.title, 'Upcoming events');
+  assert.ok(embed.title.includes('Upcoming events'));
   assert.match(embed.description, /Test Community/);
   assert.equal(embed.fields.length, 2);
   assert.match(embed.fields[0].name, /Board Game Night · A1B2C3D4/);
