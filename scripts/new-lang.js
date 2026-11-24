@@ -15,11 +15,10 @@ const english = readFileSync(join('lang', 'en.lang'), 'utf8');
 const lines = english.split(/\r?\n/);
 const scaffold = [
   `# ${code} translations. This file was scaffolded from English; translate values before public use.`,
+  `# Language: ${code} (replace with the language's display name).`,
+  '# Add one "# Contributor: Name" line for each contributor who has agreed to be credited.',
   '# Keep every key and every {placeholder} intact. Use \\n to add a line break.',
-  ...lines.filter((line) => line && !line.startsWith('#')).map((line) => {
-    if (line.startsWith('languageName=')) return `languageName=${code}`;
-    return line;
-  }),
+  ...lines.filter((line) => line && !line.startsWith('#')),
 ];
 writeFileSync(target, `${scaffold.join('\n')}\n`, 'utf8');
 console.log(`Created ${target} with the English keys. Translate the values, then run npm run check:lang.`);

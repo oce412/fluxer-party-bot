@@ -1,6 +1,7 @@
-# Русский translations for Fluxer Party Events Bot.
+# Translations for Fluxer Party Events Bot.
+# Language: Русский
+# Contributor: oce412
 # Values support \n for a line break and {name} placeholders.
-languageName=Русский
 
 ping=Понг! 🎉 Бот мероприятий на связи.
 unknownCommand=Неизвестная команда `{command}`. Напишите `!событие помощь`.
@@ -158,7 +159,9 @@ languageSubmissionFormMissing=Форма отправки перевода по�
 hostManageCommandHint=Управление доступно в любой момент: напишите мне в ЛС `{command} {id}`.
 hostManageDmFallbackShort=Не удалось отправить личное уведомление организатору, поэтому оставляю его в канале события.
 
-languageCredits=**Участники локализации**\nАнглийский (en): oce412 — первоначальная поддержка файла локали.\nРусский (ru): oce412 — первоначальная поддержка файла локали.\nУказание имени в благодарностях добровольное. Чтобы добавить имя, укажите желаемое отображаемое имя и язык в своём вкладе в перевод.
+languageCredits=**Участники локализации**\n{entries}\nУчастники указываются только с их согласия.
+languageCreditsEntry={language}: {contributors}
+languageCreditsNoContributors=Участники пока не указаны.
 upcomingEmbedTitle=Ближайшие события
 embedWhen=📅 Начало
 embedAttendees=👥 Участники

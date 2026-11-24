@@ -1,6 +1,7 @@
-# English translations for Fluxer Party Events Bot.
+# Translations for Fluxer Party Events Bot.
+# Language: English
+# Contributor: oce412
 # Values support \n for a line break and {name} placeholders.
-languageName=English
 
 ping=Pong! 🎉 Party bot is online.
 unknownCommand=Unknown command `{command}`. Try `!event help`.
@@ -158,7 +159,9 @@ cardNoLimit=no limit
 cardMaybeCount={count} maybe
 cardRsvpHint=✅ Attending · 🤔 Maybe · ❌ Remove RSVP
 
-languageCredits=**Localization contributors**\nEnglish (en): oce412 — initial locale file maintainer.\nRussian (ru): oce412 — initial locale file maintainer.\nCredits are opt-in. To request a credit, include your preferred display name and language in your translation contribution.
+languageCredits=**Localization contributors**\n{entries}\nContributors are listed only with their permission.
+languageCreditsEntry={language}: {contributors}
+languageCreditsNoContributors=No contributors listed yet.
 upcomingEmbedTitle=Upcoming events
 embedWhen=📅 Starts
 embedAttendees=👥 Attending

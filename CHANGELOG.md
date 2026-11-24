@@ -22,7 +22,7 @@
 
 - Replace event announcement text cards with localized rich embeds that refresh in place when RSVPs or event status change.
 - Use rich embeds for private event lists and event details in DMs.
-- Add `!event language credits` / `!событие язык авторы` and an opt-in locale contributor credit register.
+- Add `!event language credits` / `!событие язык авторы`, sourcing opt-in contributor credits and display names from locale-file metadata.
 - Include Fluxer's `EMBED_LINKS` permission in generated minimum and recommended bot invite URLs; keep a text-card fallback for existing installations without that permission.
 - Document the minimum permission set and the optional `MANAGE_MESSAGES` permission without requesting Administrator.
 

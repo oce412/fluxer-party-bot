@@ -8,7 +8,7 @@ import { isGatewayConnectionHealthy } from './src/gateway-health.js';
 import { log, logConsoleStyle } from './src/logger.js';
 import { DateTime } from 'luxon';
 import { randomUUID } from 'node:crypto';
-import { availableLocales, hasLocale, translate as translateText } from './src/i18n.js';
+import { availableLocales, hasLocale, localeMetadata, translate as translateText } from './src/i18n.js';
 import { getEventStartNoticeRecipients, getReminderWindow, hasActivePublishedOccurrence, shouldQueueEventStartNotice } from './src/lifecycle.js';
 import { isSupportedTimeZone, normalizeFixedOffsetTimeZone, normalizeLocalDateTimeInput, resolveDurationMinutes } from './src/time-input.js';
 import { compactNoticeOutbox, completeNoticeIfDelivered, createNoticeJob, markNoticeDelivered } from './src/notices.js';
@@ -94,7 +94,7 @@ function localeForGuild(guildId) {
 
 function languageOptionsText(guildId = null) {
   return availableLocales().map((language) => {
-    const displayName = translateText(language, 'languageName');
+    const displayName = localeMetadata(language).language ?? language;
     return `${language} (${displayName})`;
   }).join(', ');
 }
@@ -1127,7 +1127,7 @@ async function myZoneCommand(message, rawZone, guildId = message.guildId) {
 async function languageSupportCommand(message, rawArguments, guildId) {
   const parts = String(rawArguments ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
   const action = parts[0] ?? 'help';
-  const languageNames = availableLocales().map((code) => `${code} (${translateText(code, 'languageName')})`).join(', ');
+  const languageNames = availableLocales().map((code) => `${code} (${localeMetadata(code).language ?? code})`).join(', ');
   const requestUrl = safeConfiguredFormUrl(process.env.LANGUAGE_REQUEST_FORM_URL);
   const submissionUrl = safeConfiguredFormUrl(process.env.LANGUAGE_SUBMISSION_FORM_URL);
 
@@ -1136,7 +1136,15 @@ async function languageSupportCommand(message, rawArguments, guildId) {
     return;
   }
   if (['credits', 'credit', 'contributors', 'авторы', 'участники', 'благодарности'].includes(action)) {
-    await privateResponse(message, t('languageCredits', {}, guildId));
+    const entries = availableLocales().map((code) => {
+      const metadata = localeMetadata(code);
+      const language = `${metadata.language ?? code} (${code})`;
+      const contributors = metadata.contributors.length
+        ? metadata.contributors.join(', ')
+        : t('languageCreditsNoContributors', {}, guildId);
+      return t('languageCreditsEntry', { language, contributors }, guildId);
+    }).join('\\n');
+    await privateResponse(message, t('languageCredits', { entries }, guildId));
     return;
   }
   if (['request', 'запрос', 'запросить', 'нужен'].includes(action)) {

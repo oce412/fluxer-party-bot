@@ -1,14 +1,19 @@
-# Localization contributors
+# Localization contributor credits
 
-Credits are listed by locale. The entries below identify the initial locale-file maintainer; they do not claim exclusive authorship of every translated phrase.
+The `!event language credits` / `!событие язык авторы` response is generated from metadata at the top of each locale file. The locale files are the single source of truth; do not maintain a second list of names here.
 
-| Locale | Contributor | Credit |
-|---|---|---|
-| English (en) | oce412 | Initial locale-file maintainer |
-| Russian (ru) | oce412 | Initial locale-file maintainer |
+Use this format:
 
-## Adding a credit
+```text
+# Language: English
+# Contributor: preferred display name
+# Contributor: another contributor
+```
 
-Credits are opt-in. When submitting new translations or reviewing an existing locale, include the contributor's preferred display name and the locale(s) they worked on. The maintainers will update this file and the `!event language credits` response after the contributor agrees to be listed.
+- `Language` is required and should be the language's display name.
+- Each `Contributor` line adds one credit. Multiple lines are supported.
+- Contributor credits are optional. Add a name or pseudonym only after that person has agreed to be listed.
+- Omit all `Contributor` lines when nobody has opted in.
+- After editing locale metadata, run `npm run check:lang`.
 
-Please do not add someone else's name without their permission.
+The contributor name indicates an opt-in localization credit; it does not claim exclusive authorship of every translated phrase.

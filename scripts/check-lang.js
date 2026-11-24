@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { availableLocales, localeEntries } from '../src/i18n.js';
+import { availableLocales, localeEntries, localeMetadata } from '../src/i18n.js';
 
 const languages = availableLocales();
 const errors = [];
@@ -10,6 +10,14 @@ const baseLanguage = languages.includes('en') ? 'en' : languages[0];
 const base = dictionaries.get(baseLanguage) ?? new Map();
 
 for (const language of languages) {
+  const metadata = localeMetadata(language);
+  if (metadata.languageCount !== 1 || !metadata.language) {
+    errors.push(`lang/${language}.lang must contain exactly one non-empty "# Language: Display name" metadata line.`);
+  }
+  const normalizedContributors = metadata.contributors.map((name) => name.toLocaleLowerCase());
+  if (new Set(normalizedContributors).size !== normalizedContributors.length) {
+    errors.push(`lang/${language}.lang contains duplicate contributor metadata.`);
+  }
   const dictionary = dictionaries.get(language);
   for (const key of [...new Set([...base.keys(), ...dictionary.keys()])].sort()) {
     if (!dictionary.has(key)) errors.push(`Missing in ${language}.lang: ${key}`);
@@ -30,7 +38,7 @@ for (const key of [...usedKeys].sort()) {
   }
 }
 // These keys are referenced indirectly through data-driven property names or `translateText(language, key)`.
-const indirectKeys = new Set(['reminder24', 'reminder1', 'reminder5', 'languageName', 'scheduledTag']);
+const indirectKeys = new Set(['reminder24', 'reminder1', 'reminder5', 'scheduledTag']);
 for (const key of [...base.keys()].sort()) {
   if (!usedKeys.has(key) && !indirectKeys.has(key)) errors.push(`Unused translation key (remove it or use it): ${key}`);
 }
