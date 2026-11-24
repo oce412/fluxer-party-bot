@@ -9,5 +9,5 @@
 - **Backups and public-launch drafts:** `npm run db:backup`, recovery instructions, `docs/PRIVACY_POLICY_DRAFT.md`, `docs/PUBLIC_LISTING.md` and `docs/DEPLOYMENT.md`.
 
 - **Rich event presentation:** event announcements, private event lists, and event details use localized embeds. RSVP and status changes update the announcement embed in place; a text fallback keeps older installations working without Embed Links.
-- **Localization credits:** `!event language credits` / `!событие язык авторы` displays locale maintainers and opt-in contributor credits. See `lang/CONTRIBUTORS.md`.
+- **Localization credits:** `!event language credits` / `!событие язык авторы` reads the language name and opt-in contributor list from each `.lang` file's `# Language:` and repeated `# Contributor:` metadata. See `lang/CONTRIBUTORS.md` for the format and consent rules.
 - **Invite permissions:** `npm run invite` includes the required Embed Links permission. See `docs/INVITE_PERMISSIONS.md`; existing installations may need to be re-authorized to receive this permission.
