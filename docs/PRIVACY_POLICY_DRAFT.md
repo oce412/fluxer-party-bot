@@ -29,9 +29,18 @@ The data is used to run requested event features: publish event announcements, m
 
 ## Where information is stored and service providers
 
-Production event records are stored in PostgreSQL hosted by **[database provider and region]**. The bot runs on **[application host and region]**. Fluxer processes messages and account data under Fluxer's own terms and privacy policy. The bot's operator does not control Fluxer's platform-side processing.
+The bot application is deployed as a Docker container through **FluxerHost (Fluxer Community Hosting)**. FluxerHost describes its project deployments as dedicated Kubernetes namespaces with project credentials isolated from other users. Its published privacy policy says its staff may access project data for technical support, troubleshooting, or terms compliance. It describes its security measures as reasonable and does not guarantee absolute security.
 
-Other connected services: **[list every provider, including error monitoring, logs, forms, backups, or analytics; write “None” only after checking the production configuration]**.
+The bot's event, server-setting, and member time-zone records are stored in **PostgreSQL**, selected by the production `DATABASE_URL`. Confirm whether this PostgreSQL instance is provisioned inside FluxerHost's cluster or by a separate database provider, and record the actual provider and region here. FluxerHost advertises an EU infrastructure option, but public information does not establish which region or cluster this particular project uses; do not claim EU storage unless the project deployment has been confirmed as using that option.
+
+Fluxer processes message events and account data under Fluxer's own terms and privacy policy. The bot does not operate or control Fluxer's platform-side processing.
+
+Other connected services to disclose in the live listing/policy:
+- **Fluxer API/gateway:** receives command messages and supports the bot's event features.
+- **FluxerHost:** hosts the bot container and may access project data for the purposes described in its privacy policy.
+- **PostgreSQL provider:** confirm whether this is FluxerHost or a separately managed service, and disclose its region and applicable provider policy.
+- **Optional language forms:** `LANGUAGE_REQUEST_FORM_URL` and `LANGUAGE_SUBMISSION_FORM_URL` may link to third-party form providers. Name the provider(s) if either production setting is configured.
+- **Logs and backups:** application logs are written to standard output and may be collected by the hosting platform; manual PostgreSQL backups are created with `npm run db:backup`. Confirm the host's log/backup retention and whether any separate backup service is enabled.
 
 ## Direct messages and notification fallback
 
@@ -39,11 +48,19 @@ The bot may send direct messages to a member when that member RSVPs or when they
 
 ## Retention and deletion
 
-Event information is retained until **[document the actual retention period and event-history cleanup policy]**. Database backups are retained for **[number of days]**. Operational logs are retained for **[number of days]**. When the bot is removed from a server, **[describe the current deletion workflow and target completion window; do not promise automated deletion unless it is implemented]**.
+**Application data:** the current bot implementation has no automatic event-history expiry, no periodic database cleanup, and no deletion job triggered when the bot is removed from a community. Event records, RSVP identifiers/names, community settings, and saved member time-zone preferences remain in PostgreSQL until the operator deletes them manually through database maintenance or an equivalent administrative process. In practical terms, the current application retention period is **indefinite until manual deletion**.
 
-**Implementation note (24 November 2026):** the current application code does not implement automatic event retention cleanup or a server-removal deletion job. Event records and server settings remain in PostgreSQL until the operator removes them through database maintenance. Do not publish a shorter retention period or promise automatic deletion until that functionality and operational process exist.
+**Backups:** `npm run db:backup` creates a PostgreSQL dump when an operator runs it; the application does not schedule backups or automatically expire old dump files. The operator must document where backups are stored, who can access them, and the actual deletion schedule. If FluxerHost or the database provider supplies separate platform backups, their retention period must be confirmed with that provider.
 
-For access or deletion requests, contact **[privacy contact]** and identify the server and event concerned. Requests will be verified and handled under applicable law. A server administrator may be asked to verify authority for server-level data requests.
+**Operational logs:** the application writes structured logs to standard output. The hosting platform may collect them; the exact retention period is not stated in the public FluxerHost privacy policy and must be confirmed before publishing a numeric period.
+
+**Hosting-provider retention:** FluxerHost's published privacy policy says project data is retained only as long as necessary to provide the hosting service and removed within a “reasonable timeframe” after hosting is terminated. It does not publish a fixed deletion window or specific backup/log retention periods. This host-level retention statement is separate from the bot application's indefinite retention of records while its PostgreSQL database remains active.
+
+**Server removal:** removing the bot from a community does not currently delete that community's events or settings from PostgreSQL. The operator must handle verified access/deletion requests and manual cleanup. Do not imply that the bot automatically deletes data on leave.
+
+These statements describe the current implementation and public hosting policy as reviewed on 24 November 2026. Re-check provider terms and the production storage arrangement before publishing this policy.
+
+For access or deletion requests, contact **[publish a working privacy contact, e.g. a Fluxer username or support-server channel]** and identify the server and event concerned. Requests will be verified and handled under applicable law. A server administrator may be asked to verify authority for server-level data requests.
 
 ## Security
 
