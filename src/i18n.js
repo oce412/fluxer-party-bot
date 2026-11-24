@@ -6,13 +6,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const localesDirectory = resolve(here, '..', 'lang');
 const localeCache = new Map();
 const locales = readdirSync(localesDirectory).filter((name) => name.endsWith('.lang')).map((name) => name.slice(0, -5)).sort();
+const localeSet = new Set(locales);
 
 export function availableLocales() {
   return [...locales];
 }
 
 export function hasLocale(language) {
-  return locales.includes(String(language ?? '').trim().toLowerCase());
+  return localeSet.has(String(language ?? '').trim().toLowerCase());
 }
 
 function decodeValue(value) {
