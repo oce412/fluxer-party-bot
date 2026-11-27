@@ -101,13 +101,13 @@ function fitEmbed(payload) {
 
 function scheduleLine(when, whenLabel) {
   const label = text(whenLabel, 'Starts', 80).replace(/^📅\s*/, '');
-  const formattedWhen = text(when).replace(/^📅\s*/, '');
+  const formattedWhen = text(when, '—', 500).replace(/^📅\s*/, '');
   return `📅 **${label}** · ${formattedWhen}`;
 }
 
 function compactEventDescription(event, when, whenLabel) {
   const parts = [];
-  const description = String(event?.description ?? '').trim();
+  const description = text(event?.description, '', 1400);
   if (description) parts.push(description);
   if (when) parts.push(scheduleLine(when, whenLabel));
   return parts.join('\n\n');
@@ -126,7 +126,6 @@ export function buildEventAnnouncementEmbed(event, {
   footer = '',
 } = {}) {
   const attendees = attendeesOf(event);
-  const counts = attendanceCounts(attendees);
   const statusSuffix = event?.status && event.status !== 'scheduled' && statusLabel ? ` · ${statusLabel}` : '';
 
   // Keep the date in the reading flow instead of giving it a separate,
@@ -171,11 +170,11 @@ export function buildEventDetailsEmbed(event, {
   const counts = attendanceCounts(attendees);
   const capacity = attendanceCapacity(event, counts.yes, noLimitLabel);
   const metadata = [
-    `🏠 **${text(labels.community, 'Community', 80)}:** ${text(communityName)}`,
-    `📣 **${text(labels.announcements, 'Announcements', 80)}:** ${text(channelMention)}`,
+    `🏠 **${text(labels.community, 'Community', 80)}:** ${text(communityName, '—', 100)}`,
+    `📣 **${text(labels.announcements, 'Announcements', 80)}:** ${text(channelMention, '—', 100)}`,
   ].join('  ·  ');
   const description = [
-    String(event?.description ?? '').trim(),
+    text(event?.description, '', 1150),
     when ? scheduleLine(when, labels.when ?? 'Starts') : '',
     metadata,
   ].filter(Boolean).join('\n\n');
