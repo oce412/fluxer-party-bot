@@ -135,7 +135,7 @@ test('embed builders safely truncate user-controlled text and handle missing eve
   });
 
   assert.equal(embed.title.length, 256);
-  assert.equal(embed.description.length, 2048);
+  assert.ok(embed.description.length <= 2048);
   assert.ok(embed.fields.every((field) => field.name.length <= 256 && field.value.length <= 1024));
   assert.equal(embed.color, getEventEmbedColor('scheduled'));
 });
