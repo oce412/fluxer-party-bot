@@ -1,6 +1,9 @@
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import packageJson from '../package.json' with { type: 'json' };
 import { createServer } from 'node:http';
+
+const PROJECT_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
 function sendJson(response, statusCode, body) {
   const payload = JSON.stringify(body);
@@ -25,6 +28,7 @@ function readGitRevision() {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 1500,
       windowsHide: true,
+      cwd: PROJECT_ROOT,
     }).trim();
     if (!/^[a-f0-9]{7,40}$/i.test(revision)) return 'unknown';
 
@@ -37,6 +41,7 @@ function readGitRevision() {
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 1500,
         windowsHide: true,
+        cwd: PROJECT_ROOT,
       }).trim());
     } catch {
       // The commit SHA is still useful if Git status is unavailable.
