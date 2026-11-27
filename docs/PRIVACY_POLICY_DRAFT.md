@@ -56,16 +56,22 @@ The project has optional language-request and translation-submission forms that 
 
 **Backups and hosting logs:** the application does not schedule its own automatic database backups or set an automatic expiry for manual backup files. FluxerHost may maintain infrastructure backups or snapshots and may collect application logs. Those copies are managed under FluxerHost's own retention practices, not by the bot's community-removal cleanup. FluxerHost's public policy does not state a fixed deletion period for backups or logs; see its [privacy policy](https://fluxer.host/privacy).
 
-## 7. Security
+## 7. Your data-protection rights
+
+Depending on the law that applies and the legal basis for a particular use of data, you may be entitled to request access to your personal data, have inaccurate information corrected, request deletion or restriction of processing, receive a portable copy of data you provided, or object to certain processing. Where processing is based on consent, you may withdraw that consent; withdrawal does not affect processing carried out before it was withdrawn.
+
+You may also lodge a complaint with the data-protection supervisory authority responsible for your location. Contact the operator first at [partybotfluxer@gmail.com](mailto:partybotfluxer@gmail.com) so the request can be reviewed and, where appropriate, resolved.
+
+## 8. Security
 
 The operator takes reasonable steps to protect the bot and its stored information, including restricting database access, keeping credentials in hosting secrets, using database TLS where supported, and applying database migrations. No online service can guarantee absolute security.
 
-## 8. Privacy requests and policy updates
+## 9. Contact and policy updates
 
-For questions, access requests, corrections, or deletion requests, email [partybotfluxer@gmail.com](mailto:partybotfluxer@gmail.com).
+For questions, access requests, corrections, or deletion requests, email [partybotfluxer@gmail.com](mailto:partybotfluxer@gmail.com). Include the Fluxer user ID and relevant community/event information, but do not send passwords, bot tokens or database credentials.
 
 This policy may be updated when the bot, its data practices, or its service providers change. The latest version should be published at a stable public URL and linked from the bot's listing.
 
 ---
 
-**Publication note for the operator:** before publishing this as the final policy, confirm the applicable legal basis for each processing purpose and add any other controller details or rights information required for the operator's circumstances. EU data-protection rules require a notice to explain the controller's identity and contact details, purposes and legal basis, recipients, retention period or criteria, and relevant data-subject rights. See [GDPR Article 13](https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng).
+**Publication note for the operator:** this is still a draft, not legal advice. Before publishing, confirm the controller's full identity (a public handle alone may not be sufficient), the legal basis for each processing purpose, and which jurisdiction's supervisory authority and additional notices apply. GDPR Article 13 requires transparency about controller identity/contact details, purposes and legal basis, recipients, retention and data-subject rights. See [GDPR Article 13](https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng).
