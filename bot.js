@@ -843,7 +843,7 @@ async function setupCommand(message, rawArguments) {
     await updateGuildSettings(guildId, { dmControlsEnabled: enabled });
     // Confirm the preference change in the channel where the admin issued it,
     // including the opt-in transition that would otherwise route this reply to DMs.
-    await safeReply(message, t(enabled ? 'dmControlsEnabled' : 'dmControlsDisabled', {}, guildId));
+    await safeReply(message, (enabled ? t('dmControlsEnabled', {}, guildId) : t('dmControlsDisabled', {}, guildId)));
     return;
   }
   if (action === 'channel') {
@@ -1061,7 +1061,7 @@ async function promptSetupStep(user, session) {
     await user.send(t('setupWizardComplete', {
       channel, zone: cfg.defaultTimeZone, language: cfg.language,
       duration: cfg.eventDurationMinutes,
-      dmControls: t(cfg.dmControlsEnabled ? 'dmControlsOn' : 'dmControlsOff', {}, session.guildId),
+      dmControls: (cfg.dmControlsEnabled ? t('dmControlsOn', {}, session.guildId) : t('dmControlsOff', {}, session.guildId)),
     }, session.guildId));
     return;
   }
@@ -1083,7 +1083,7 @@ async function promptSetupStep(user, session) {
     await user.send(t('setupWizardAskDuration', { duration: cfg.eventDurationMinutes }, session.guildId));
   } else if (step === 'dmControls') {
     await user.send(t('setupWizardAskDmControls', {
-      state: t(cfg.dmControlsEnabled ? 'dmControlsOn' : 'dmControlsOff', {}, session.guildId),
+      state: (cfg.dmControlsEnabled ? t('dmControlsOn', {}, session.guildId) : t('dmControlsOff', {}, session.guildId)),
     }, session.guildId));
   }
 }
@@ -1195,13 +1195,13 @@ async function handleSetupWizardAnswer(message, rawAnswer) {
     const enabled = parseOptionalBoolean(answer);
     if (enabled === null) {
       await message.author.send(t('setupWizardAskDmControls', {
-        state: t(cfg.dmControlsEnabled ? 'dmControlsOn' : 'dmControlsOff', {}, session.guildId),
+        state: (cfg.dmControlsEnabled ? t('dmControlsOn', {}, session.guildId) : t('dmControlsOff', {}, session.guildId)),
       }, session.guildId));
       return;
     }
     await updateGuildSettings(session.guildId, { dmControlsEnabled: enabled });
     await message.author.send(t('setupWizardSaved', {
-      setting: t(enabled ? 'dmControlsEnabled' : 'dmControlsDisabled', {}, session.guildId),
+      setting: t('setupWizardDmControlsSaved', {}, session.guildId),
     }, session.guildId));
   }
 
