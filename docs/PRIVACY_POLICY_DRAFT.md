@@ -1,74 +1,71 @@
-# Privacy Policy — Fluxer Party Events Bot (Draft; not yet publishable)
+# Privacy Policy — Fluxer Party Bot
 
-**Status:** Draft — not the final public privacy policy.
-**Last reviewed:** 25 November 2026
-**Operator:** oce412
-**Contact:** fuckDiscord#6219  
-**Public bot name:** Juke
+**Last updated:** 27 November 2026  
+**Operator:** oce412  
+**Bot name:** Juke (Fluxer Party Bot)  
+**Privacy contact:** [partybotfluxer@gmail.com](mailto:partybotfluxer@gmail.com)
 
-## What the bot does
+## 1. About the bot
 
-The bot creates and announces community events, stores RSVPs, supports recurring schedules, sends reminders, and lets event hosts manage their events. Each server's configuration and event records are separated by server ID.
+Juke helps Fluxer communities create and announce events, collect RSVPs, manage recurring events, and send event-related reminders and notifications. Community settings and event records are stored separately for each community.
 
-## Information processed
+## 2. Information the bot stores
 
-Depending on which features a server uses, the bot may store:
+Depending on how a community uses the bot, the following information may be stored:
 
-- Server ID and server-level settings, including language, time zone, announcement channel and default duration.
-- Event title, description, scheduled time, time zone, duration, host's user ID/display name, event/channel/message IDs, recurrence information and event status.
-- RSVP user IDs, display names/usernames captured for the RSVP, and RSVP state (attending/maybe).
-- Reminder and notification delivery state, such as which recipients have already received a reminder, to avoid duplicates.
-- A member's time-zone preference when they set one.
-- Operational logs may include event, channel or server identifiers, error messages, counts and service state. They are JSON-formatted and include redaction for common secret fields and token-like strings. The operator should avoid logging message content, event descriptions, attendee lists, bot tokens or database credentials.
+- **Community settings:** community ID, announcement-channel ID, language, default time zone, default event duration, and whether private DM controls are enabled.
+- **Event details:** event title and description, start date and time, time zone, duration, recurrence settings, event status, announcement channel and message IDs, and the host's Fluxer user ID and display name.
+- **RSVPs:** the Fluxer user ID and captured username or display name of each attendee, together with their RSVP status (such as attending or maybe).
+- **Personal time-zone preferences:** a member's preferred display time zone, if they choose to set one.
+- **Notification records:** recipient IDs and delivery status used to avoid sending the same event reminder or update repeatedly.
+- **Operational logs:** service status, community/channel/event identifiers, counts, and error information needed to diagnose problems. Logs are written to the hosting platform's standard output and may be collected by FluxerHost.
 
-The bot does not need to archive general server conversations for its event features. Its command handler receives Fluxer message events, but application code should process the message in memory and should not persist arbitrary message content.
+The bot processes supported commands and wizard replies in memory to perform the requested action. It is not designed to archive ordinary community conversations, and the application does not intentionally store general message history or arbitrary chat messages.
 
-## Why this information is used
+## 3. How the information is used
 
-The data is used to run requested event features: publish event announcements, manage attendance, apply server-specific settings, schedule reminders, validate host actions, prevent duplicate deliveries, diagnose service failures and protect the service from misuse.
+The information above is used to publish and manage events, maintain RSVP lists, apply community settings, display event times, schedule reminders, deliver event-related notifications, prevent duplicate messages, and diagnose or protect the service.
 
-## Where information is stored and service providers
+The bot does not use this information for advertising or sell it to advertisers.
 
-The bot application is deployed as a Docker container through **FluxerHost (Fluxer Community Hosting)**. FluxerHost describes its project deployments as dedicated Kubernetes namespaces with project credentials isolated from other users ([hosting overview](https://fluxer.host/about)). Its [published privacy policy](https://fluxer.host/privacy) says its staff may access project data for technical support, troubleshooting, or terms compliance. It describes its security measures as reasonable and does not guarantee absolute security.
+## 4. Commands, private messages and notifications
 
-The bot's event, server-setting, and member time-zone records are stored in **PostgreSQL running in a persistent container hosted through FluxerHost**, using the production `DATABASE_URL`. The database provider is therefore FluxerHost, not a separately selected external database service. The exact physical region of the Kubernetes cluster and the persistent storage backing this database have not been confirmed. FluxerHost advertises an EU infrastructure option ([hosting overview](https://fluxer.host/)), but that does not establish that this particular project uses it. Do not claim EU/EEA or any other specific data residency until FluxerHost confirms the location of the bot workload, PostgreSQL container and persistent volume. Also confirm the locations and retention periods for any platform snapshots or backups.
+By default, commands sent in a community are answered in that community's channel.
 
-Fluxer processes message events and account data under Fluxer's own terms and privacy policy. The bot does not operate or control Fluxer's platform-side processing.
+A community administrator can optionally enable **private DM controls** in the setup wizard or with `!event setup dm on`. When enabled, members can use private messages for supported event commands and guided event creation or management. The setting can be disabled again with `!event setup dm off`.
 
-Other connected services to disclose in the live listing/policy:
-- **Fluxer API/gateway:** receives command messages and supports the bot's event features.
-- **FluxerHost:** hosts both the bot application and its persistent PostgreSQL container. Its staff may access project data for the purposes described in its privacy policy.
-- **Optional language forms:** `LANGUAGE_REQUEST_FORM_URL` and `LANGUAGE_SUBMISSION_FORM_URL` may link to third-party form providers. Name the provider(s) if either production setting is configured.
-- **Logs and backups:** application logs are written to standard output and may be collected by the hosting platform; manual PostgreSQL backups are created with `npm run db:backup`. Confirm the host's log, snapshot and backup retention and whether any separate backup service is enabled.
+The bot may also send event-related private messages to hosts and members who have RSVP'd, for reminders, event-start notices, or relevant host/event updates. These messages are tied to the event and the bot's configured notification features. If a private message cannot be delivered, the bot may post a fallback notice in the event's configured channel and identify only the intended recipients.
 
-## Direct messages and notification fallback
+## 5. Where information is stored
 
-The bot may send direct messages to a member when that member RSVPs or when they are the host or an interested attendee for a scheduled event. If a direct message cannot be delivered, the bot may post a notification in the event's configured server channel and mention only the affected recipients where possible. The bot should not send promotional or unrelated unsolicited messages.
+The bot application and its PostgreSQL database are hosted by **FluxerHost**. PostgreSQL runs in a persistent container. This project uses FluxerHost's **EU infrastructure**.
 
-## Retention and deletion
+FluxerHost describes its hosting environment as Kubernetes-based and says its staff may access project data when needed for technical support, troubleshooting, or compliance with its terms. See the [FluxerHost hosting overview](https://fluxer.host/about) and [FluxerHost privacy policy](https://fluxer.host/privacy) for the host's own processing practices.
 
-**Application data:** the current bot implementation has no automatic event-history expiry, no periodic database cleanup, and no deletion job triggered when the bot is removed from a community. Event records, RSVP identifiers/names, community settings, and saved member time-zone preferences remain in PostgreSQL until the operator deletes them manually through database maintenance or an equivalent administrative process. In practical terms, the current application retention period is **indefinite until manual deletion**.
+Fluxer operates the platform, accounts and messaging infrastructure under its own terms and privacy policy. The bot operator does not control Fluxer's platform-side processing.
 
-**Backups:** `npm run db:backup` creates a PostgreSQL dump when an operator runs it; the application does not schedule backups or automatically expire old dump files. The operator must document where backups are stored, who can access them, and the actual deletion schedule. If FluxerHost supplies separate platform snapshots or backups, their retention period must be confirmed with the host.
+The project has optional language-request and translation-submission forms that may use Google Forms. These forms are not currently publicly enabled. If they are enabled in the future, information submitted through them will also be handled by Google under Google's own terms and privacy policy.
 
-**Operational logs:** the application writes structured logs to standard output. The hosting platform may collect them; the exact retention period is not stated in the public FluxerHost privacy policy and must be confirmed before publishing a numeric period.
+## 6. Retention and deletion
 
-**Hosting-provider retention:** FluxerHost's published privacy policy says project data is retained only as long as necessary to provide the hosting service and removed within a “reasonable timeframe” after hosting is terminated. It does not publish a fixed deletion window or specific backup/log retention periods. This host-level retention statement is separate from the bot application's indefinite retention of records while its PostgreSQL database remains active.
+**While the bot remains in a community:** event records, RSVP information, community settings and saved time-zone preferences remain in the active database. The bot currently has no automatic age-based expiry for event history. This means those records may remain until they are deleted by a community-removal cleanup or a verified deletion request.
 
-**Server removal:** removing the bot from a community does not currently delete that community's events or settings from PostgreSQL. The operator must handle verified access/deletion requests and manual cleanup. Do not imply that the bot automatically deletes data on leave.
+**When the bot is removed from a community:** after receiving Fluxer's permanent community-removal event, the bot deletes that community's event records (including RSVPs and notification records), community settings, and member time-zone preferences from its active PostgreSQL database. A temporary Fluxer outage is not treated as removal and does not trigger deletion.
 
-These statements describe the current implementation and publicly available hosting policy as reviewed on 25 November 2026. Re-check provider terms and confirm the actual cluster, persistent-volume, backup and log locations/retention before publishing this policy.
+**Individual deletion requests:** members and community administrators can request access to or deletion of relevant information by emailing [partybotfluxer@gmail.com](mailto:partybotfluxer@gmail.com). Include the Fluxer user ID and, where relevant, the community and event concerned. The operator may ask for reasonable information to verify the request or the requester's authority. A community administrator may be asked to verify a request relating to community-wide records.
 
-For access or deletion requests, contact **[publish a working privacy contact, e.g. a Fluxer username or support-server channel]** and identify the server and event concerned. Requests will be verified and handled under applicable law. A server administrator may be asked to verify authority for server-level data requests.
+**Backups and hosting logs:** the application does not schedule its own automatic database backups or set an automatic expiry for manual backup files. FluxerHost may maintain infrastructure backups or snapshots and may collect application logs. Those copies are managed under FluxerHost's own retention practices, not by the bot's community-removal cleanup. FluxerHost's public policy does not state a fixed deletion period for backups or logs; see its [privacy policy](https://fluxer.host/privacy).
 
-## Security
+## 7. Security
 
-The operator restricts database access, keeps bot tokens and credentials in hosting secrets, uses TLS for database connections where supported, applies schema migrations, and maintains backups. No internet service can guarantee absolute security; suspected data incidents can be reported to **[contact]**.
+The operator takes reasonable steps to protect the bot and its stored information, including restricting database access, keeping credentials in hosting secrets, using database TLS where supported, and applying database migrations. No online service can guarantee absolute security.
 
-## International processing and legal basis
+## 8. Privacy requests and policy updates
 
-The bot and PostgreSQL container are hosted through FluxerHost, but the physical region of the cluster and persistent storage has not yet been confirmed. The operator's own country/region and the applicable legal basis and transfer safeguards are **[complete after review of the actual deployment and user base]**.
+For questions, access requests, corrections, or deletion requests, email [partybotfluxer@gmail.com](mailto:partybotfluxer@gmail.com).
 
-## Changes and contact
+This policy may be updated when the bot, its data practices, or its service providers change. The latest version should be published at a stable public URL and linked from the bot's listing.
 
-This policy may be updated when bot functionality or service providers change. Material changes will be announced through **[support server or project page]**. Contact **[privacy contact]** with questions or requests.
+---
+
+**Publication note for the operator:** before publishing this as the final policy, confirm the applicable legal basis for each processing purpose and add any other controller details or rights information required for the operator's circumstances. EU data-protection rules require a notice to explain the controller's identity and contact details, purposes and legal basis, recipients, retention period or criteria, and relevant data-subject rights. See [GDPR Article 13](https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng).
