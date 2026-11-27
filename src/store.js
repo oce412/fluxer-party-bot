@@ -200,6 +200,57 @@ async function persistEvents(eventsToSave) {
   }
 }
 
+/**
+ * Permanently remove all application records belonging to a community.
+ * Called only for a permanent GuildDelete (not temporary gateway unavailability).
+ */
+export async function deleteGuildData(guildId) {
+  const id = String(guildId ?? '').trim();
+  if (!id) throw new TypeError('A valid guild ID is required for data deletion.');
+
+  const removedEventCount = events.filter((event) => String(event.guildId ?? event.guild_id ?? '') === id).length;
+  const removedUserSettingCount = Object.keys(userSettings).filter((key) => key.startsWith(`${id}:`)).length;
+
+  if (backend === 'postgresql') {
+    // Serialize deletion behind prior event writes so a queued upsert cannot
+    // recreate rows after the guild's records have been removed.
+    const operation = postgresEventsWriteQueue.then(async () => {
+      if (!pool) throw new Error('PostgreSQL pool is unavailable during community data deletion.');
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM party_events WHERE guild_id = $1', [id]);
+        await client.query('DELETE FROM party_guild_settings WHERE guild_id = $1', [id]);
+        await client.query('DELETE FROM party_user_settings WHERE guild_id = $1', [id]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
+    postgresEventsWriteQueue = operation.catch(() => {});
+    await operation;
+  }
+
+  events = events.filter((event) => String(event.guildId ?? event.guild_id ?? '') !== id);
+  delete guildSettings[id];
+  for (const key of Object.keys(userSettings)) {
+    if (key.startsWith(`${id}:`)) delete userSettings[key];
+  }
+
+  if (backend === 'json') {
+    await Promise.all([
+      queueAtomicWrite('events', eventsFile, JSON.stringify(events, null, 2)),
+      queueAtomicWrite('settings', settingsFile, JSON.stringify({ guilds: guildSettings, users: userSettings }, null, 2)),
+    ]);
+  }
+
+  log.info('Deleted community application data', { guildId: id, removedEventCount, removedUserSettingCount });
+  return { guildId: id, removedEventCount, removedUserSettingCount };
+}
+
 export function getGuildSettings(guildId) {
   return { ...(guildSettings[guildId] ?? {}) };
 }

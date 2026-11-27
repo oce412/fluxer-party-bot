@@ -2,12 +2,13 @@ import { Client, Events, PermissionFlags } from '@fluxerjs/core';
 import { canContinueEventManagementSession, canManageEvent, findGuildScopedEvent, findUniqueEventById } from './src/authz.js';
 import { clearDmGuildContext, DM_GUILD_CONTEXT_TTL_MS, fetchGuildMemberSafely, getActiveDmGuildContext, peekDmGuildContext, resolveGuildSelection, setDmGuildContext } from './src/dm-context.js';
 import { getEventAttendees, getUpcomingEvents } from './src/event-list.js';
+import { buildEventAnnouncementEmbed, buildEventDetailsEmbed, buildUpcomingEventsEmbed } from './src/event-embeds.js';
 import { startHealthServer } from './src/health.js';
 import { isGatewayConnectionHealthy } from './src/gateway-health.js';
 import { log, logConsoleStyle } from './src/logger.js';
 import { DateTime } from 'luxon';
 import { randomUUID } from 'node:crypto';
-import { availableLocales, hasLocale, translate as translateText } from './src/i18n.js';
+import { availableLocales, hasLocale, localeMetadata, translate as translateText } from './src/i18n.js';
 import { getEventStartNoticeRecipients, getReminderWindow, hasActivePublishedOccurrence, shouldQueueEventStartNotice } from './src/lifecycle.js';
 import { isSupportedTimeZone, normalizeFixedOffsetTimeZone, normalizeLocalDateTimeInput, resolveDurationMinutes } from './src/time-input.js';
 import { compactNoticeOutbox, completeNoticeIfDelivered, createNoticeJob, markNoticeDelivered } from './src/notices.js';
@@ -15,6 +16,7 @@ import {
   addEvents,
   allEvents,
   closeStore,
+  deleteGuildData,
   getGuildSettings,
   getUserTimeZone,
   initStore,
@@ -74,6 +76,7 @@ function configForGuild(guildId) {
     defaultTimeZone: saved.defaultTimeZone ?? defaultZone,
     announcementChannelId: saved.announcementChannelId ?? null,
     eventDurationMinutes: saved.eventDurationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES,
+    dmControlsEnabled: saved.dmControlsEnabled === true,
   };
 }
 
@@ -91,9 +94,14 @@ function localeForGuild(guildId) {
   return language === 'en' ? 'en-US' : language;
 }
 
+function appendLocaleContributorCredit(content, language) {
+  const contributors = localeMetadata(language).contributors;
+  return contributors.length ? `${content}\n\n-# ✍️ ${contributors.join(', ')}` : content;
+}
+
 function languageOptionsText(guildId = null) {
   return availableLocales().map((language) => {
-    const displayName = translateText(language, 'languageName');
+    const displayName = localeMetadata(language).language ?? language;
     return `${language} (${displayName})`;
   }).join(', ');
 }
@@ -214,7 +222,7 @@ const DM_GUILD_LOOKUP_CONCURRENCY = 5;
 const DM_GUILD_SELECTION_SESSION_TTL_MS = DM_GUILD_CONTEXT_TTL_MS;
 const EVENT_CREATE_SESSION_TTL_MS = 30 * 60 * 1000;
 const EVENT_CREATE_STEPS = ['dateTime', 'timeZone', 'limit', 'repeat', 'duration', 'notifyOnStart', 'title', 'description', 'confirm'];
-const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration'];
+const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration', 'dmControls'];
 
 client.on(Events.Error, (error) => {
   gatewayReady = false;
@@ -246,6 +254,43 @@ client.on(Events.Resumed, () => {
     pingMs: client.ws?.ping ?? null,
     appEnv: APP_ENV,
   });
+});
+
+// Fluxer.js emits GuildUnavailable separately for temporary outages;
+// GuildDelete is reserved for permanent removal of the bot from a community.
+client.on(Events.GuildDelete, async (guild) => {
+  const guildId = String(guild?.id ?? '').trim();
+  if (!guildId) {
+    log.warn('Received GuildDelete without a guild ID; community data was not modified');
+    return;
+  }
+
+  try {
+    const result = await deleteGuildData(guildId);
+
+    for (const [userId, context] of dmGuildContexts) {
+      if (String(context?.guildId ?? '') === guildId) dmGuildContexts.delete(userId);
+    }
+    for (const [userId, session] of eventCreateSessions) {
+      if (String(session?.guildId ?? '') === guildId) eventCreateSessions.delete(userId);
+    }
+    for (const [userId, session] of hostManageSessions) {
+      if (String(session?.guildId ?? '') === guildId) hostManageSessions.delete(userId);
+    }
+    for (const [userId, session] of setupSessions) {
+      if (String(session?.guildId ?? '') === guildId) setupSessions.delete(userId);
+    }
+    for (const [userId, session] of dmGuildSelectionSessions) {
+      if (Array.isArray(session?.guilds)) {
+        session.guilds = session.guilds.filter((item) => String(item?.id ?? '') !== guildId);
+        if (!session.guilds.length) dmGuildSelectionSessions.delete(userId);
+      }
+    }
+
+    log.info('Community data removed after bot removal', result);
+  } catch (error) {
+    log.error('Could not delete community data after bot removal', { guildId, error });
+  }
 });
 
 client.on(Events.MessageCreate, async (message) => {
@@ -402,12 +447,11 @@ client.on(Events.MessageReactionAdd, async ({ message, reaction, emoji, userId, 
 
     const result = changeRsvp(event, userId, user?.username ?? `User-${userId.slice(-4)}`, status);
     if (!result.ok) {
-      const sentPrivately = user?.send ? await user.send(result.reason).then(() => true).catch(() => false) : false;
-      if (!sentPrivately) {
-        const eventMessage = message ?? (reaction ? await reaction.fetchMessage() : null);
-        if (eventMessage) {
-          await eventMessage.reply({ content: result.reason, allowedMentions: { parse: [], repliedUser: false } });
-        }
+      // RSVP validation feedback belongs under the event post; reacting is not
+      // consent to receive a separate direct message.
+      const eventMessage = message ?? (reaction ? await reaction.fetchMessage() : null);
+      if (eventMessage) {
+        await eventMessage.reply({ content: result.reason, allowedMentions: { parse: [], repliedUser: false } });
       }
       return;
     }
@@ -464,6 +508,12 @@ async function safeReply(message, content) {
 }
 
 async function privateResponse(message, content, { deleteCommand = true } = {}) {
+  // Server commands reply in-channel by default. Private command responses are
+  // an explicit per-community opt-in; actual DM commands always stay in DMs.
+  if (message.guildId && !configForGuild(message.guildId).dmControlsEnabled) {
+    await safeReply(message, content);
+    return true;
+  }
   try {
     for (const chunk of splitPrivateMessageContent(content)) {
       await message.author.send(chunk);
@@ -478,6 +528,31 @@ async function privateResponse(message, content, { deleteCommand = true } = {}) 
       await safeReply(message, t('dmFailed', {}, message.guildId));
     } catch (replyError) {
       logConsoleStyle('error', '[DM fallback failed]', replyError?.message ?? replyError);
+    }
+    return false;
+  }
+}
+
+async function privateEmbedResponse(message, embed, { deleteCommand = true } = {}) {
+  if (message.guildId && !configForGuild(message.guildId).dmControlsEnabled) {
+    await message.reply({ embeds: [embed], allowedMentions: { parse: [], repliedUser: false } });
+    return true;
+  }
+  try {
+    await message.author.send({
+      embeds: [embed],
+      allowedMentions: { parse: [] },
+    });
+    if (deleteCommand && typeof message.delete === 'function') {
+      try { await message.delete(); } catch { /* Manage Messages is optional. */ }
+    }
+    return true;
+  } catch (error) {
+    logConsoleStyle('warn', '[DM embed response unavailable]', error?.message ?? error);
+    try {
+      await safeReply(message, t('dmFailed', {}, message.guildId));
+    } catch (replyError) {
+      logConsoleStyle('error', '[DM embed fallback failed]', replyError?.message ?? replyError);
     }
     return false;
   }
@@ -574,8 +649,8 @@ async function selectDmGuild(message, pendingCommand = null, pendingArguments = 
   const userId = message.author.id;
   const input = String(requestedInput ?? '').trim();
 
-  // The command dispatcher re-checks membership in the selected community.
-  // Do not enumerate every community when a valid short-lived context exists.
+  // dispatchDmEventCommand re-checks membership, so a saved context is enough
+  // for ordinary commands; full guild discovery is only needed to present choices.
   const activeGuildId = !input && pendingCommand
     ? getActiveDmGuildContext(dmGuildContexts, userId)
     : null;
@@ -681,6 +756,11 @@ async function dispatchDmEventCommand(message, command, rawArguments, guildId) {
     await message.author.send(t('dmServerNotMember', { guild: guildId }, null));
     return;
   }
+  if (!configForGuild(guildId).dmControlsEnabled) {
+    clearDmGuildContext(dmGuildContexts, message.author.id);
+    await message.author.send(t('dmControlsDisabled', {}, guildId));
+    return;
+  }
   switch (command) {
     case 'create':
       if (!rawArguments.trim() || ['wizard', 'мастер', 'guided'].includes(rawArguments.trim().toLowerCase())) {
@@ -722,6 +802,7 @@ async function setupCommand(message, rawArguments) {
     ['зона', 'timezone'], ['часовойпояс', 'timezone'], ['timezone', 'timezone'], ['zone', 'timezone'],
     ['язык', 'language'], ['language', 'language'], ['lang', 'language'],
     ['длительность', 'duration'], ['duration', 'duration'],
+    ['dm', 'dmControls'], ['dms', 'dmControls'], ['private', 'dmControls'], ['личные', 'dmControls'],
   ]);
   const action = actionMap.get(actionRaw) ?? actionRaw;
   const guildId = message.guildId;
@@ -747,8 +828,24 @@ async function setupCommand(message, rawArguments) {
     await beginSetupWizard(message.author, guildId, ['duration'], message);
     return;
   }
+  if (action === 'dmControls' && parts.length === 0) {
+    await beginSetupWizard(message.author, guildId, ['dmControls'], message);
+    return;
+  }
 
   const cfg = configForGuild(guildId);
+  if (action === 'dmControls') {
+    const enabled = parseOptionalBoolean(parts[0]);
+    if (enabled === null || parts.length > 1) {
+      await privateResponse(message, t('setupDmControlsUsage', {}, guildId));
+      return;
+    }
+    await updateGuildSettings(guildId, { dmControlsEnabled: enabled });
+    // Confirm the preference change in the channel where the admin issued it,
+    // including the opt-in transition that would otherwise route this reply to DMs.
+    await safeReply(message, (enabled ? t('dmControlsEnabled', {}, guildId) : t('dmControlsDisabled', {}, guildId)));
+    return;
+  }
   if (action === 'channel') {
     const rawChannel = parts.join(' ').trim().replace(/^<#(\d+)>$/, '$1').replace(/^#/, '');
     const guild = client.guilds.get(guildId);
@@ -787,8 +884,14 @@ async function setupCommand(message, rawArguments) {
       await privateResponse(message, t('setupLanguageInvalid', { languages: languageOptionsText(guildId) }, guildId));
       return;
     }
+    const previousLanguage = configForGuild(guildId).language;
+    const languageWasConfigured = hasLocale(getGuildSettings(guildId).language);
     await updateGuildSettings(guildId, { language });
-    await privateResponse(message, t('setupLanguageSaved', { language }, guildId));
+    const displayName = localeMetadata(language).language ?? language;
+    const confirmation = t('setupLanguageSaved', { language: displayName }, guildId);
+    await privateResponse(message, !languageWasConfigured || language !== previousLanguage
+      ? appendLocaleContributorCredit(confirmation, language)
+      : confirmation);
     return;
   }
 
@@ -814,6 +917,7 @@ async function startSetupFromDm(message, input) {
     ['зона', 'timezone'], ['часовойпояс', 'timezone'], ['timezone', 'timezone'], ['zone', 'timezone'],
     ['язык', 'language'], ['language', 'language'], ['lang', 'language'],
     ['длительность', 'duration'], ['duration', 'duration'],
+    ['dm', 'dmControls'], ['dms', 'dmControls'], ['private', 'dmControls'], ['личные', 'dmControls'],
   ]);
   const action = actionMap.get(actionRaw) ?? null;
   const steps = action ? [action] : SETUP_FLOW_STEPS;
@@ -957,6 +1061,7 @@ async function promptSetupStep(user, session) {
     await user.send(t('setupWizardComplete', {
       channel, zone: cfg.defaultTimeZone, language: cfg.language,
       duration: cfg.eventDurationMinutes,
+      dmControls: (cfg.dmControlsEnabled ? t('dmControlsOn', {}, session.guildId) : t('dmControlsOff', {}, session.guildId)),
     }, session.guildId));
     return;
   }
@@ -976,6 +1081,10 @@ async function promptSetupStep(user, session) {
     await user.send(t('setupWizardAskLanguage', { language: cfg.language, languages: languageOptionsText(session.guildId) }, session.guildId));
   } else if (step === 'duration') {
     await user.send(t('setupWizardAskDuration', { duration: cfg.eventDurationMinutes }, session.guildId));
+  } else if (step === 'dmControls') {
+    await user.send(t('setupWizardAskDmControls', {
+      state: (cfg.dmControlsEnabled ? t('dmControlsOn', {}, session.guildId) : t('dmControlsOff', {}, session.guildId)),
+    }, session.guildId));
   }
 }
 
@@ -1065,8 +1174,14 @@ async function handleSetupWizardAnswer(message, rawAnswer) {
       await message.author.send(t('setupWizardAskLanguage', { language: cfg.language, languages: languageOptionsText(session.guildId) }, session.guildId));
       return;
     }
+    const previousLanguage = cfg.language;
+    const languageWasConfigured = hasLocale(getGuildSettings(session.guildId).language);
     await updateGuildSettings(session.guildId, { language });
-    await message.author.send(t('setupWizardSaved', { setting: t('setupWizardLanguageSaved', {}, session.guildId) }, session.guildId));
+    const displayName = localeMetadata(language).language ?? language;
+    const confirmation = t('setupWizardLanguageSaved', { language: displayName }, session.guildId);
+    await message.author.send(!languageWasConfigured || language !== previousLanguage
+      ? appendLocaleContributorCredit(confirmation, language)
+      : confirmation);
   } else if (step === 'duration') {
     const duration = Number(answer);
     if (!Number.isInteger(duration) || duration < 30 || duration > 720) {
@@ -1076,6 +1191,18 @@ async function handleSetupWizardAnswer(message, rawAnswer) {
     }
     await updateGuildSettings(session.guildId, { eventDurationMinutes: duration });
     await message.author.send(t('setupWizardSaved', { setting: t('setupWizardDurationSaved', {}, session.guildId) }, session.guildId));
+  } else if (step === 'dmControls') {
+    const enabled = parseOptionalBoolean(answer);
+    if (enabled === null) {
+      await message.author.send(t('setupWizardAskDmControls', {
+        state: (cfg.dmControlsEnabled ? t('dmControlsOn', {}, session.guildId) : t('dmControlsOff', {}, session.guildId)),
+      }, session.guildId));
+      return;
+    }
+    await updateGuildSettings(session.guildId, { dmControlsEnabled: enabled });
+    await message.author.send(t('setupWizardSaved', {
+      setting: t('setupWizardDmControlsSaved', {}, session.guildId),
+    }, session.guildId));
   }
 
   session.stepIndex += 1;
@@ -1122,11 +1249,11 @@ async function myZoneCommand(message, rawZone, guildId = message.guildId) {
 async function languageSupportCommand(message, rawArguments, guildId) {
   const parts = String(rawArguments ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
   const action = parts[0] ?? 'help';
-  const languageNames = availableLocales().map((code) => `${code} (${translateText(code, 'languageName')})`).join(', ');
   const requestUrl = safeConfiguredFormUrl(process.env.LANGUAGE_REQUEST_FORM_URL);
   const submissionUrl = safeConfiguredFormUrl(process.env.LANGUAGE_SUBMISSION_FORM_URL);
 
   if (['help', 'list', 'список', 'помощь'].includes(action)) {
+    const languageNames = availableLocales().map((code) => `${code} (${localeMetadata(code).language ?? code})`).join(', ');
     await privateResponse(message, t('languageSupportInfo', { languages: languageNames }, guildId));
     return;
   }
@@ -1159,6 +1286,10 @@ function safeConfiguredFormUrl(rawValue) {
 }
 
 async function startEventCreationWizard(message, guildId) {
+  if (message.guildId && !configForGuild(guildId).dmControlsEnabled) {
+    await privateResponse(message, t('dmControlsOptInRequired', {}, guildId));
+    return;
+  }
   const config = configForGuild(guildId);
   if (!config.announcementChannelId) {
     await privateResponse(message, t('noChannelConfigured', {}, guildId));
@@ -1601,25 +1732,7 @@ function parseOptionalBoolean(value) {
 async function replyCreateError(message, content, guildId = message.guildId) {
   const originalCommand = String(message.content ?? '');
   const preservedText = `${t('createCommandPreserved', {}, guildId)}\n${originalCommand}`;
-
-  if (!message.guildId) {
-    await safeReply(message, content);
-    await safeReply(message, preservedText);
-    return;
-  }
-
-  try {
-    await message.author.send(content);
-    await message.author.send(preservedText);
-    await tryDeleteCommand(message);
-  } catch (error) {
-    logConsoleStyle('warn', '[Could not DM event creation correction]', error?.message ?? error);
-    try {
-      await safeReply(message, t('dmFailed', {}, message.guildId));
-    } catch (replyError) {
-      logConsoleStyle('error', '[Event creation correction fallback failed]', replyError?.message ?? replyError);
-    }
-  }
+  await privateResponse(message, `${content}\n\n${preservedText}`, { deleteCommand: false });
 }
 
 function parseRecurrence(input) {
@@ -1645,42 +1758,32 @@ async function listEvents(message, guildId = message.guildId) {
     return;
   }
 
-  const guild = getCollectionItem(client.guilds, guildId) ?? getCollectionItem(client.guilds?.cache, guildId);
+  const guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
   const channel = configForGuild(guildId).announcementChannelId;
-  const header = t('dmEventLocation', {
-    guild: guild?.name ?? guildId,
-    channel: channel ? '<#' + channel + '>' : t('dmUnknownChannel', {}, guildId),
-  }, guildId);
-  const lines = upcoming.map((event) => {
-    const attendees = getEventAttendees(event);
-    const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
-    const rawLimit = Number(event.maxAttendees);
-    const hasLimit = Number.isInteger(rawLimit) && rawLimit > 0;
-    const spots = hasLimit
-      ? yesCount + '/' + rawLimit
-      : yesCount + ' · ' + (langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit');
-    let when = String(event.startsAt);
-    try {
-      when = formatPersonalTime(event, message.author.id).replaceAll('\n', ' · ');
-    } catch (error) {
-      logConsoleStyle('warn', '[Event list time formatting failed for ' + String(event.id ?? 'unknown') + ']', error?.message ?? error);
-    }
-    return t('upcomingLine', {
-      title: String(event.title ?? 'Untitled event').slice(0, 100),
-      id: String(event.id ?? 'unknown'),
-      when,
-      spots,
-    }, guildId);
+  const embed = buildUpcomingEventsEmbed(upcoming, {
+    communityName: guild?.name ?? guildId,
+    channelMention: channel ? '<#' + channel + '>' : t('dmUnknownChannel', {}, guildId),
+    formatWhen: (event) => formatPersonalTime(event, message.author.id).replaceAll('\n', ' · '),
+    noLimitLabel: t('cardNoLimit', {}, guildId),
+    maybeLabel: t('embedMaybe', {}, guildId),
+    labels: {
+      title: t('upcomingEmbedTitle', {}, guildId),
+      community: t('dmCommunityLabel', {}, guildId),
+      announcements: t('dmChannelLabel', {}, guildId),
+    },
+    footer: t('embedListFooter', {}, guildId),
   });
-  await privateResponse(message, header + '\n\n' + t('upcomingTitle', {}, guildId) + '\n' + lines.join('\n') + '\n\n' + t('upcomingFooter', {}, guildId));
+  await privateEmbedResponse(message, embed);
 }
+
 async function showEventInfo(message, idInput, guildId = message.guildId) {
   const event = findGuildEvent(idInput, guildId);
   if (!event || !event.messageId) {
     await privateResponse(message, t('noEvent', {}, guildId));
     return;
   }
-  await privateResponse(message, renderEventDetails(event, message.author.id));
+  await privateEmbedResponse(message, renderEventDetails(event, message.author.id));
 }
 
 async function commandRsvp(message, rawArguments, guildId = message.guildId) {
@@ -1830,6 +1933,10 @@ function renderHostManageMenu(event, userId) {
 }
 
 async function startEventManagement(message, idInput, guildId = message.guildId) {
+  if (message.guildId && !configForGuild(guildId).dmControlsEnabled) {
+    await privateResponse(message, t('dmControlsOptInRequired', {}, guildId));
+    return;
+  }
   const id = String(idInput ?? '').trim().replaceAll('`', '').toUpperCase();
   if (!id) {
     await privateResponse(message, t('hostManageUsage', {}, message.guildId));
@@ -2203,7 +2310,22 @@ async function publishEventPost(event) {
   try {
     const channel = await client.channels.fetch(event.channelId);
     if (!channel?.isGuild?.() || !channel?.isTextBased?.()) return false;
-    const post = await channel.send({ content: renderEventCard(event), allowedMentions: { parse: [] } });
+
+    let post;
+    try {
+      post = await channel.send({
+        embeds: [renderEventCard(event)],
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      if (!isEmbedPermissionError(error)) throw error;
+      logConsoleStyle('warn', `Embed permission is missing for channel ${event.channelId}; publishing a text fallback for event ${event.id}.`);
+      post = await channel.send({
+        content: renderEventCardText(event),
+        allowedMentions: { parse: [] },
+      });
+    }
+
     event.messageId = post.id;
     event.publishedAt = DateTime.utc().toISO({ suppressMilliseconds: true });
     await saveEvents([event]);
@@ -2230,20 +2352,74 @@ async function refreshEventPost(event) {
     const channel = await client.channels.fetch(event.channelId);
     if (!channel?.isTextBased?.()) return;
     const post = await channel.messages.fetch(event.messageId);
-    await post.edit({ content: renderEventCard(event), allowedMentions: { parse: [] } });
+    try {
+      await post.edit({
+        content: null,
+        embeds: [renderEventCard(event)],
+        allowedMentions: { parse: [] },
+      });
+    } catch (error) {
+      if (!isEmbedPermissionError(error)) throw error;
+      logConsoleStyle('warn', `Embed permission is missing for channel ${event.channelId}; retaining a text card for event ${event.id}.`);
+      await post.edit({
+        content: renderEventCardText(event),
+        embeds: [],
+        allowedMentions: { parse: [] },
+      });
+    }
   } catch (error) {
     logConsoleStyle('warn', `Could not refresh the post for event ${event.id}:`, error?.message ?? error);
   }
 }
 
+function isEmbedPermissionError(error) {
+  const candidates = [error, error?.cause].filter(Boolean);
+  return candidates.some((candidate) => {
+    const code = String(candidate.code ?? '').toUpperCase();
+    // A generic 403/MISSING_ACCESS can also mean the bot cannot see or send
+    // to the channel; only fall back for a permission failure or explicit
+    // Embed Links wording, not for unrelated channel-access errors.
+    return ['MISSING_PERMISSIONS', 'MISSING_PERMISSION'].includes(code)
+      || /embed.{0,30}permission|permission.{0,30}embed|EMBED_LINKS/i.test(String(candidate.message ?? ''));
+  });
+}
+
 function renderEventCard(event) {
   const guildId = event.guildId;
-  const yesCount = event.attendees.filter((attendee) => attendee.status === 'yes').length;
-  const maybeCount = event.attendees.filter((attendee) => attendee.status === 'maybe').length;
+  const statusKey = {
+    scheduled: 'scheduledTag',
+    cancelled: 'cancelledTag',
+    in_progress: 'inProgressTag',
+    completed: 'completedTag',
+    skipped: 'skippedTag',
+  }[event.status];
+  const hint = event.status === 'scheduled' && !isEventStarted(event)
+    ? t('cardRsvpHint', {}, guildId)
+    : event.status === 'in_progress'
+      ? t('eventStarted', {}, guildId)
+      : (statusKey ? t(statusKey, {}, guildId) : String(event.status ?? ''));
+  return buildEventAnnouncementEmbed(event, {
+    when: formatAnnouncementTime(event),
+    duration: `~${formatDuration(event.durationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES, guildId)}`,
+    noLimitLabel: t('cardNoLimit', {}, guildId),
+    maybeLabel: t('embedMaybe', {}, guildId),
+    whenLabel: t('embedWhen', {}, guildId),
+    attendeesLabel: t('embedAttendees', {}, guildId),
+    durationLabel: t('embedDuration', {}, guildId),
+    statusLabel: statusKey ? t(statusKey, {}, guildId) : '',
+    hostLabel: t('embedHost', {}, guildId),
+    footer: t('embedAnnouncementFooter', { id: event.id }, guildId),
+  });
+}
+
+function renderEventCardText(event) {
+  const guildId = event.guildId;
+  const attendees = getEventAttendees(event);
+  const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
+  const maybeCount = attendees.filter((attendee) => attendee.status === 'maybe').length;
   const capacity = event.maxAttendees === null
     ? `${yesCount} · ${t('cardNoLimit', {}, guildId)}`
     : `${yesCount}/${event.maxAttendees}`;
-
   const status = event.status === 'cancelled'
     ? ` · ⛔ ${t('cancelledTag', {}, guildId)}`
     : event.status === 'in_progress'
@@ -2253,25 +2429,21 @@ function renderEventCard(event) {
         : event.status === 'skipped'
           ? ` · ⚪ ${t('skippedTag', {}, guildId)}`
           : '';
-
   const lines = [
     `**🎉 ${escapeMarkdownInline(event.title)}**${status}`,
     formatAnnouncementTime(event),
     `👥 **${capacity}** · ⏳ ~${formatDuration(event.durationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES, guildId)}${maybeCount ? ` · 🤔 ${t('cardMaybeCount', { count: maybeCount }, guildId)}` : ''}`,
   ];
-
   if (event.description) {
     const cleanDescription = String(event.description).replace(/\s+/g, ' ').trim();
     const shortDescription = [...cleanDescription].slice(0, 180).join('');
     lines.push(`📝 ${shortDescription}${[...cleanDescription].length > 180 ? '…' : ''}`);
   }
-
   if (event.status === 'scheduled' && !isEventStarted(event)) {
     lines.push('', t('cardRsvpHint', {}, guildId));
   } else if (event.status === 'in_progress') {
     lines.push('', t('eventStarted', {}, guildId));
   }
-
   return lines.join('\n');
 }
 
@@ -2281,30 +2453,40 @@ function escapeMarkdownInline(value) {
 
 function renderEventDetails(event, userId) {
   const guildId = event.guildId;
-  const yes = event.attendees.filter((attendee) => attendee.status === 'yes');
-  const maybe = event.attendees.filter((attendee) => attendee.status === 'maybe');
-  const state = event.status === 'cancelled' ? t('cancelledTag', {}, guildId)
-    : event.status === 'in_progress' ? t('inProgressTag', {}, guildId)
-      : event.status === 'completed' ? t('completedTag', {}, guildId) : null;
-  const guild = client.guilds.get(guildId);
-  const lines = [
-    `🎉 **${event.title}**${state ? ` · ${state}` : ''}`,
-    `🏠 **${t('dmCommunityLabel', {}, guildId)}:** ${guild?.name ?? guildId}`,
-    `📣 **${t('dmChannelLabel', {}, guildId)}:** <#${event.channelId}>`,
-    `🆔 **ID:** \`${event.id}\``,
-    formatPersonalTime(event, userId),
-    `👤 ${t('host', {}, guildId)}: ${event.creatorName}`,
-    `👥 ${t('spots', {}, guildId)}: ${event.maxAttendees === null ? `${yes.length} · ${langForGuild(guildId) === 'ru' ? 'без лимита' : 'no limit'}` : `${yes.length}/${event.maxAttendees}`}`,
-    `✅ ${t('attending', {}, guildId)} (${yes.length}): ${yes.length ? yes.map((a) => a.username).slice(0, 30).join(', ') : t('noConfirmed', {}, guildId)}`,
-    `🤔 ${t('maybe', {}, guildId)} (${maybe.length}): ${maybe.length ? maybe.map((a) => a.username).slice(0, 20).join(', ') : '—'}`,
-  ];
-  if (event.description) lines.push(`📝 ${t('details', {}, guildId)}: ${event.description}`);
-  if (event.status === 'scheduled' && !isEventStarted(event)) {
-    lines.push('', langForGuild(guildId) === 'ru'
-      ? `RSVP: \`!событие rsvp ${event.id} да|возможно|нет\``
-      : `RSVP: \`!event rsvp ${event.id} yes|maybe|no\``);
-  }
-  return lines.join('\n');
+  const guild = getCollectionItem(client.guilds, guildId)
+    ?? getCollectionItem(client.guilds?.cache, guildId);
+  const statusKey = {
+    scheduled: 'scheduledTag',
+    cancelled: 'cancelledTag',
+    in_progress: 'inProgressTag',
+    completed: 'completedTag',
+    skipped: 'skippedTag',
+  }[event.status];
+  const statusValue = statusKey ? t(statusKey, {}, guildId) : String(event.status ?? '—');
+  const rsvpCommand = langForGuild(guildId) === 'ru'
+    ? `!событие rsvp ${event.id} да|возможно|нет`
+    : `!event rsvp ${event.id} yes|maybe|no`;
+  return buildEventDetailsEmbed(event, {
+    communityName: guild?.name ?? guildId,
+    channelMention: `<#${event.channelId}>`,
+    when: formatPersonalTime(event, userId),
+    duration: formatDuration(event.durationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES, guildId),
+    noLimitLabel: t('cardNoLimit', {}, guildId),
+    maybeLabel: t('embedMaybe', {}, guildId),
+    labels: {
+      community: t('dmCommunityLabel', {}, guildId),
+      announcements: t('dmChannelLabel', {}, guildId),
+      when: t('embedWhen', {}, guildId),
+      host: t('embedHost', {}, guildId),
+      attendees: t('embedAttendees', {}, guildId),
+      duration: t('embedDuration', {}, guildId),
+      attendingNames: t('embedAttendingNames', {}, guildId),
+      maybeNames: t('embedMaybeNames', {}, guildId),
+      status: t('embedStatus', {}, guildId),
+      statusValue,
+    },
+    footer: t('embedInfoFooter', { id: event.id, command: rsvpCommand }, guildId),
+  });
 }
 
 function findGuildEvent(idInput, guildId) {

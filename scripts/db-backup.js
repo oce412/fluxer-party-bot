@@ -21,9 +21,20 @@ childEnv.PGPORT = parsed.port || '5432';
 childEnv.PGDATABASE = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
 if (parsed.username) childEnv.PGUSER = decodeURIComponent(parsed.username);
 if (parsed.password) childEnv.PGPASSWORD = decodeURIComponent(parsed.password);
-const querySsl = parsed.searchParams.get('sslmode');
-if (querySsl) childEnv.PGSSLMODE = querySsl;
-else if (['1', 'true', 'yes'].includes(String(process.env.DATABASE_SSL ?? '').toLowerCase())) childEnv.PGSSLMODE = 'require';
+const sslEnabled = ['1', 'true', 'yes'].includes(String(process.env.DATABASE_SSL ?? '').toLowerCase());
+const rejectUnauthorized = !['0', 'false', 'no'].includes(String(process.env.DATABASE_SSL_REJECT_UNAUTHORIZED ?? 'true').toLowerCase());
+if (!sslEnabled) {
+  childEnv.PGSSLMODE = 'disable';
+} else if (rejectUnauthorized) {
+  // Match the application pool's certificate-verification default. libpq uses
+  // ~/.postgresql/root.crt unless DATABASE_SSL_CA points to a provider CA file.
+  childEnv.PGSSLMODE = 'verify-full';
+  const rootCertificate = String(process.env.DATABASE_SSL_CA ?? '').trim();
+  if (rootCertificate) childEnv.PGSSLROOTCERT = rootCertificate;
+} else {
+  // Explicit opt-out: preserve encryption but do not verify the server identity.
+  childEnv.PGSSLMODE = 'require';
+}
 const child = spawn('pg_dump', ['--format=custom', '--no-owner', '--no-privileges', '--file', output], {
   env: childEnv,
   stdio: 'inherit',

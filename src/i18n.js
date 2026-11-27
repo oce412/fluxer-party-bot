@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const localesDirectory = resolve(here, '..', 'lang');
 const localeCache = new Map();
+const metadataCache = new Map();
 const locales = readdirSync(localesDirectory).filter((name) => name.endsWith('.lang')).map((name) => name.slice(0, -5)).sort();
 const localeSet = new Set(locales);
 
@@ -14,6 +15,34 @@ export function availableLocales() {
 
 export function hasLocale(language) {
   return localeSet.has(String(language ?? '').trim().toLowerCase());
+}
+
+export function parseLocaleMetadata(source) {
+  const languages = [];
+  const contributors = [];
+  for (const sourceLine of String(source ?? '').split(/\r?\n/)) {
+    const match = sourceLine.match(/^\s*#\s*([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$/);
+    if (!match) continue;
+    const key = match[1].toLowerCase();
+    const value = match[2].trim();
+    if (!value) continue;
+    if (key === 'language') languages.push(value.slice(0, 80));
+    if (key === 'contributor') contributors.push(value.slice(0, 80));
+  }
+  return {
+    language: languages[0] ?? null,
+    languageCount: languages.length,
+    contributors: [...new Set(contributors)],
+  };
+}
+
+export function localeMetadata(language) {
+  const normalized = normalizeLocaleCode(language);
+  if (metadataCache.has(normalized)) return metadataCache.get(normalized);
+  const filePath = resolve(localesDirectory, normalized + '.lang');
+  const metadata = parseLocaleMetadata(readFileSync(filePath, 'utf8'));
+  metadataCache.set(normalized, metadata);
+  return metadata;
 }
 
 function decodeValue(value) {
@@ -29,8 +58,14 @@ function decodeValue(value) {
   return result;
 }
 
+function normalizeLocaleCode(language) {
+  return String(language ?? 'ru').toLowerCase().startsWith('en') ? 'en'
+    : String(language ?? 'ru').toLowerCase().startsWith('ru') ? 'ru'
+      : String(language ?? 'ru').toLowerCase();
+}
+
 export function loadLocale(language) {
-  const normalized = String(language ?? 'ru').toLowerCase().startsWith('en') ? 'en' : String(language ?? 'ru').toLowerCase().startsWith('ru') ? 'ru' : String(language ?? 'ru').toLowerCase();
+  const normalized = normalizeLocaleCode(language);
   if (localeCache.has(normalized)) return localeCache.get(normalized);
   const filePath = resolve(localesDirectory, `${normalized}.lang`);
   const dictionary = new Map();

@@ -1,12 +1,12 @@
 {
   "name": "fluxer-party-events-bot",
-  "version": "0.8.1",
+  "version": "0.9.1-beta.1",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node --env-file=.env bot.js",
     "dev": "node --watch --env-file=.env bot.js",
-    "check": "node --check bot.js && node --check src/store.js && node --check src/i18n.js && node --check src/lifecycle.js && node --check src/notices.js && node --check src/logger.js && node --check src/health.js && node --check src/gateway-health.js && node --check src/authz.js && node --check src/dm-context.js && node --check src/event-list.js && node --check src/time-input.js && node --check src/db-migrations.js && node --check scripts/run-migrations.js && node --check scripts/db-backup.js && node --check scripts/invite-url.js && node --check test/lifecycle.test.js && node --check test/time-input.test.js && node --check test/dm-context.test.js && node --check test/event-list.test.js && node --check test/notices.test.js && node --check test/authz.test.js && node --check test/i18n.test.js && node --check test/health.test.js && node --check test/gateway-health.test.js && node --check test/db-migrations.test.js && node --check test/logger.test.js && npm run check:lang",
+    "check": "node --check bot.js && node --check src/store.js && node --check src/i18n.js && node --check src/lifecycle.js && node --check src/notices.js && node --check src/logger.js && node --check src/health.js && node --check src/gateway-health.js && node --check src/authz.js && node --check src/dm-context.js && node --check src/event-list.js && node --check src/event-embeds.js && node --check src/invite-permissions.js && node --check src/time-input.js && node --check src/db-migrations.js && node --check scripts/run-migrations.js && node --check scripts/db-backup.js && node --check scripts/invite-url.js && node --check test/lifecycle.test.js && node --check test/time-input.test.js && node --check test/dm-context.test.js && node --check test/event-list.test.js && node --check test/event-embeds.test.js && node --check test/invite-permissions.test.js && node --check test/notices.test.js && node --check test/authz.test.js && node --check test/health.test.js && node --check test/gateway-health.test.js && node --check test/db-migrations.test.js && node --check test/logger.test.js && node --check test/i18n.test.js && npm run check:lang",
     "check:lang": "node scripts/check-lang.js",
     "lang:add": "node scripts/new-lang.js",
     "test": "node --test",
