@@ -79,4 +79,11 @@ This notice may be updated when Juke's features, data practices, or service prov
 
 ---
 
-**Important operator note:** this page describes the bot's current technical behavior. Before presenting it as a final GDPR notice or submitting the bot to a public listing, the operator still needs to confirm the controller's full legal identity and the applicable legal basis for each processing purpose. GDPR Articles 13 and 14 require, among other things, controller identity/contact details and the purposes and legal basis of processing. See the [official GDPR text](https://eur-lex.europa.eu/eli/reg/2016/679/oj/eng).
+## 9. Data controller
+
+Juke (Fluxer Party Events Bot) is operated by an independent developer known in the Fluxer community as fuckDiscord#6219.
+
+For privacy-related questions, personal-data requests, or other concerns, contact:
+
+Email: partybotfluxer@gmail.com
+Fluxer: fuckDiscord#6219
