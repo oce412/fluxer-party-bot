@@ -98,7 +98,7 @@ test('builds a DM details embed with compact metadata and grouped attendee names
   assert.match(embed.description, /Dec 5, 2026, 18:00/);
   assert.equal(embed.fields.find((field) => field.name === 'Confirmed attendees').value, 'Alice, Bob');
   assert.equal(embed.fields.find((field) => field.name === 'Maybe attendees').value, 'Charlie');
-  assert.equal(embed.fields.find((field) => field.name === 'Places').value, '**2 · no limit**\n🤔 Maybe: 1');
+  assert.equal(embed.fields.find((field) => field.name === 'Places').value, '**2/12**\n🤔 Maybe: 1');
   assert.equal(embed.color, getEventEmbedColor('scheduled'));
 });
 
