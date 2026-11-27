@@ -26,7 +26,7 @@ Recommended values:
 | Variable | Purpose |
 |---|---|
 | `EXPECTED_BOT_USER_ID` | Prevents accidentally starting with a token for another bot |
-| `BUILD_REVISION` | Git commit SHA reported by `GET /healthz`; can be set as a runtime environment variable |
+| `BUILD_REVISION` | Git commit SHA reported by `GET /healthz`; build-time value takes precedence over local Git detection |
 | `FLUXER_APPLICATION_ID` | Used by `npm run invite` to generate the OAuth2 invite |
 | `BOT_LANGUAGE=en` | Fallback language for unconfigured communities |
 | `EVENT_DEFAULT_TIME_ZONE=UTC` | Default event time zone |
@@ -41,9 +41,11 @@ Use a production PostgreSQL connection with least-privilege access. Keep `DATABA
 
 ## Container deployment
 
-The repository Dockerfile uses Node.js 24, installs locked production dependencies with `npm ci --omit=dev`, runs as the unprivileged `node` user, and copies only runtime files. It accepts `--build-arg BUILD_REVISION=<git-sha>` and exposes that marker through `/healthz`. Set the same value as a runtime `BUILD_REVISION` environment variable when building outside GitHub Actions.
+The repository Dockerfile uses Node.js 24, installs locked production dependencies with `npm ci --omit=dev`, runs as the unprivileged `node` user, and copies only runtime files. It accepts `--build-arg BUILD_REVISION=<git-sha>`, stores that value in the image environment and OCI revision label, and exposes it through `/healthz`.
 
-The container entrypoint refuses startup unless `APP_ENV=production`, `FLUXER_BOT_TOKEN`, and `DATABASE_URL` are present. It runs database migrations before starting the bot. Deploy the image produced by the trusted master/tag workflow and pin the deployed image to an immutable digest where the hosting platform supports it. Pull-request Docker builds are validation-only and do not publish an image. Feature branches are not published by the current workflow; when testing a feature branch on FluxerHost, build from the exact branch/commit or ask the host operator to update the project to that revision.
+The GitHub Actions Docker workflow already passes `github.sha` as `BUILD_REVISION` when it builds an image. Pull-request Docker builds are validation-only and do not publish an image. The publishing workflow runs on pushes to `master` and version tags. If FluxerHost builds the Dockerfile directly from its own source integration rather than deploying the image published by this workflow, verify that its builder passes `BUILD_REVISION` as a build argument (or configure it as a runtime environment variable). The Dockerfile's default is `unknown`; a third-party builder cannot infer the commit from this image because Git metadata is intentionally not copied into the container.
+
+The container entrypoint refuses startup unless `APP_ENV=production`, `FLUXER_BOT_TOKEN`, and `DATABASE_URL` are present. It runs database migrations before starting the bot. Deploy the image produced by the trusted master/tag workflow and pin the deployed image to an immutable digest where the hosting platform supports it. Feature branches are not published by the current workflow; when testing a feature branch on FluxerHost, build from the exact branch/commit or ask the host operator to update the project to that revision.
 
 Persistent event and settings data is in PostgreSQL. The local `DATA_DIR` is used for legacy JSON import/backup-related files; do not rely on the container's writable layer as durable storage.
 
@@ -67,7 +69,9 @@ When `HEALTH_PORT` or `PORT` is set, the bot serves:
 - `GET /healthz` — process health, package version and source revision.
 - `GET /readyz` — readiness, including Fluxer gateway and storage health, plus the same version/revision marker.
 
-For a feature-branch deployment, compare the `revision` returned by `/healthz` with the current head SHA shown on GitHub for the branch you intended to deploy; `unknown` means the host has not been configured to pass the build revision through.
+When `BUILD_REVISION` is set, its value is used. In a local source checkout without that variable, the health server discovers `git rev-parse HEAD` automatically. It appends `-dirty` when tracked or untracked (non-ignored) working-tree changes are present, so the response does not misrepresent uncommitted local code as an exact commit. Production containers do not include Git; they must receive the revision at image build time or through the runtime environment. If the builder supplies neither, the response remains `unknown`.
+
+Compare the response with the intended GitHub commit. A `-dirty` suffix means the current local code differs from the checked-in commit; `unknown` in a container means the deployment did not pass a revision marker through.
 
 The Docker health check uses `/readyz`. Keep the health port reachable by your platform's health checker but do not expose an unnecessary management surface to the public internet.
 
@@ -85,7 +89,7 @@ The Docker health check uses `/readyz`. Keep the health port reachable by your p
 
 After deployment:
 
-1. Confirm `/healthz` reports the intended version and exact source revision (not `unknown`).
+1. Confirm `/healthz` reports the intended version and exact source revision (not `unknown` or `-dirty`).
 2. Create a **new test event** and check its announcement and DM `!event info ID` output. New posts use embeds immediately. Existing announcements are not bulk-converted at startup; they are refreshed to embeds after an RSVP or host edit/status change.
 3. Confirm the bot logs in as the expected bot identity and `/readyz` returns HTTP 200.
 4. In a test community, run `!event setup`, create an event, RSVP yes/maybe/no, and use host controls to edit and cancel it.
