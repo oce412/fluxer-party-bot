@@ -145,7 +145,8 @@ setupWizardChannelRequired=An announcement channel is required before I can publ
 setupWizardAskTimezone=**Time zone**\nCurrent: `{zone}`. Enter an IANA zone such as `Europe/Amsterdam` or a fixed offset such as `UTC+2` or `GMT-5:30`.
 setupWizardTimezoneInvalid=I couldn’t recognize that time zone. Enter an IANA zone such as `Europe/Amsterdam` or a fixed offset such as `UTC+2`, or type `skip` to keep `{zone}`.
 setupWizardAskLanguage=**Bot language**\nCurrent: `{language}`. Available: {languages}. Reply with a language code.
-setupWizardAskDuration=**Event duration**\nCurrent: {duration} minutes. Enter a number from 30 to 720.\nsetupWizardAskDmControls=**Enable private DM controls?**\nCurrent setting: {state}. Reply `yes` to let members use private messages for event commands and guided create/manage workflows, or `no` to keep commands and replies in server channels by default.
+setupWizardAskDuration=**Event duration**\nCurrent: {duration} minutes. Enter a number from 30 to 720.
+setupWizardAskDmControls=**Enable private DM controls?**\nCurrent setting: {state}. Reply `yes` to let members use private messages for event commands and guided create/manage workflows, or `no` to keep commands and replies in server channels by default.
 setupWizardDurationInvalid=Enter a whole number from 30 to 720 minutes, `skip`, or `cancel`.
 setupWizardSaved=✅ Saved: {setting}.
 setupWizardSkipped=Kept the current value unchanged.
