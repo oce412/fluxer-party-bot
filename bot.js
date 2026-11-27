@@ -76,6 +76,7 @@ function configForGuild(guildId) {
     defaultTimeZone: saved.defaultTimeZone ?? defaultZone,
     announcementChannelId: saved.announcementChannelId ?? null,
     eventDurationMinutes: saved.eventDurationMinutes ?? DEFAULT_EVENT_DURATION_MINUTES,
+    dmControlsEnabled: saved.dmControlsEnabled === true,
   };
 }
 
@@ -221,7 +222,7 @@ const DM_GUILD_LOOKUP_CONCURRENCY = 5;
 const DM_GUILD_SELECTION_SESSION_TTL_MS = DM_GUILD_CONTEXT_TTL_MS;
 const EVENT_CREATE_SESSION_TTL_MS = 30 * 60 * 1000;
 const EVENT_CREATE_STEPS = ['dateTime', 'timeZone', 'limit', 'repeat', 'duration', 'notifyOnStart', 'title', 'description', 'confirm'];
-const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration'];
+const SETUP_FLOW_STEPS = ['channel', 'timezone', 'language', 'duration', 'dmControls'];
 
 client.on(Events.Error, (error) => {
   gatewayReady = false;
@@ -508,6 +509,12 @@ async function safeReply(message, content) {
 }
 
 async function privateResponse(message, content, { deleteCommand = true } = {}) {
+  // Server commands reply in-channel by default. Private command responses are
+  // an explicit per-community opt-in; actual DM commands always stay in DMs.
+  if (message.guildId && !configForGuild(message.guildId).dmControlsEnabled) {
+    await safeReply(message, content);
+    return true;
+  }
   try {
     for (const chunk of splitPrivateMessageContent(content)) {
       await message.author.send(chunk);
@@ -528,6 +535,10 @@ async function privateResponse(message, content, { deleteCommand = true } = {}) 
 }
 
 async function privateEmbedResponse(message, embed, { deleteCommand = true } = {}) {
+  if (message.guildId && !configForGuild(message.guildId).dmControlsEnabled) {
+    await message.reply({ embeds: [embed], allowedMentions: { parse: [], repliedUser: false } });
+    return true;
+  }
   try {
     await message.author.send({
       embeds: [embed],
@@ -746,6 +757,11 @@ async function dispatchDmEventCommand(message, command, rawArguments, guildId) {
     await message.author.send(t('dmServerNotMember', { guild: guildId }, null));
     return;
   }
+  if (!configForGuild(guildId).dmControlsEnabled) {
+    clearDmGuildContext(dmGuildContexts, message.author.id);
+    await message.author.send(t('dmControlsDisabled', {}, guildId));
+    return;
+  }
   switch (command) {
     case 'create':
       if (!rawArguments.trim() || ['wizard', 'мастер', 'guided'].includes(rawArguments.trim().toLowerCase())) {
@@ -787,6 +803,7 @@ async function setupCommand(message, rawArguments) {
     ['зона', 'timezone'], ['часовойпояс', 'timezone'], ['timezone', 'timezone'], ['zone', 'timezone'],
     ['язык', 'language'], ['language', 'language'], ['lang', 'language'],
     ['длительность', 'duration'], ['duration', 'duration'],
+    ['dm', 'dmControls'], ['dms', 'dmControls'], ['private', 'dmControls'], ['личные', 'dmControls'],
   ]);
   const action = actionMap.get(actionRaw) ?? actionRaw;
   const guildId = message.guildId;
@@ -812,8 +829,22 @@ async function setupCommand(message, rawArguments) {
     await beginSetupWizard(message.author, guildId, ['duration'], message);
     return;
   }
+  if (action === 'dmControls' && parts.length === 0) {
+    await beginSetupWizard(message.author, guildId, ['dmControls'], message);
+    return;
+  }
 
   const cfg = configForGuild(guildId);
+  if (action === 'dmControls') {
+    const enabled = parseOptionalBoolean(parts[0]);
+    if (enabled === null || parts.length > 1) {
+      await privateResponse(message, t('setupDmControlsUsage', {}, guildId));
+      return;
+    }
+    await updateGuildSettings(guildId, { dmControlsEnabled: enabled });
+    await privateResponse(message, t(enabled ? 'dmControlsEnabled' : 'dmControlsDisabled', {}, guildId));
+    return;
+  }
   if (action === 'channel') {
     const rawChannel = parts.join(' ').trim().replace(/^<#(\d+)>$/, '$1').replace(/^#/, '');
     const guild = client.guilds.get(guildId);
@@ -885,6 +916,7 @@ async function startSetupFromDm(message, input) {
     ['зона', 'timezone'], ['часовойпояс', 'timezone'], ['timezone', 'timezone'], ['zone', 'timezone'],
     ['язык', 'language'], ['language', 'language'], ['lang', 'language'],
     ['длительность', 'duration'], ['duration', 'duration'],
+    ['dm', 'dmControls'], ['dms', 'dmControls'], ['private', 'dmControls'], ['личные', 'dmControls'],
   ]);
   const action = actionMap.get(actionRaw) ?? null;
   const steps = action ? [action] : SETUP_FLOW_STEPS;
@@ -1028,6 +1060,7 @@ async function promptSetupStep(user, session) {
     await user.send(t('setupWizardComplete', {
       channel, zone: cfg.defaultTimeZone, language: cfg.language,
       duration: cfg.eventDurationMinutes,
+      dmControls: t(cfg.dmControlsEnabled ? 'dmControlsOn' : 'dmControlsOff', {}, session.guildId),
     }, session.guildId));
     return;
   }
@@ -1047,6 +1080,10 @@ async function promptSetupStep(user, session) {
     await user.send(t('setupWizardAskLanguage', { language: cfg.language, languages: languageOptionsText(session.guildId) }, session.guildId));
   } else if (step === 'duration') {
     await user.send(t('setupWizardAskDuration', { duration: cfg.eventDurationMinutes }, session.guildId));
+  } else if (step === 'dmControls') {
+    await user.send(t('setupWizardAskDmControls', {
+      state: t(cfg.dmControlsEnabled ? 'dmControlsOn' : 'dmControlsOff', {}, session.guildId),
+    }, session.guildId));
   }
 }
 
@@ -1153,6 +1190,18 @@ async function handleSetupWizardAnswer(message, rawAnswer) {
     }
     await updateGuildSettings(session.guildId, { eventDurationMinutes: duration });
     await message.author.send(t('setupWizardSaved', { setting: t('setupWizardDurationSaved', {}, session.guildId) }, session.guildId));
+  } else if (step === 'dmControls') {
+    const enabled = parseOptionalBoolean(answer);
+    if (enabled === null) {
+      await message.author.send(t('setupWizardAskDmControls', {
+        state: t(cfg.dmControlsEnabled ? 'dmControlsOn' : 'dmControlsOff', {}, session.guildId),
+      }, session.guildId));
+      return;
+    }
+    await updateGuildSettings(session.guildId, { dmControlsEnabled: enabled });
+    await message.author.send(t('setupWizardSaved', {
+      setting: t(enabled ? 'dmControlsEnabled' : 'dmControlsDisabled', {}, session.guildId),
+    }, session.guildId));
   }
 
   session.stepIndex += 1;
@@ -1236,6 +1285,10 @@ function safeConfiguredFormUrl(rawValue) {
 }
 
 async function startEventCreationWizard(message, guildId) {
+  if (message.guildId && !configForGuild(guildId).dmControlsEnabled) {
+    await privateResponse(message, t('dmControlsOptInRequired', {}, guildId));
+    return;
+  }
   const config = configForGuild(guildId);
   if (!config.announcementChannelId) {
     await privateResponse(message, t('noChannelConfigured', {}, guildId));
@@ -1678,25 +1731,7 @@ function parseOptionalBoolean(value) {
 async function replyCreateError(message, content, guildId = message.guildId) {
   const originalCommand = String(message.content ?? '');
   const preservedText = `${t('createCommandPreserved', {}, guildId)}\n${originalCommand}`;
-
-  if (!message.guildId) {
-    await safeReply(message, content);
-    await safeReply(message, preservedText);
-    return;
-  }
-
-  try {
-    await message.author.send(content);
-    await message.author.send(preservedText);
-    await tryDeleteCommand(message);
-  } catch (error) {
-    logConsoleStyle('warn', '[Could not DM event creation correction]', error?.message ?? error);
-    try {
-      await safeReply(message, t('dmFailed', {}, message.guildId));
-    } catch (replyError) {
-      logConsoleStyle('error', '[Event creation correction fallback failed]', replyError?.message ?? replyError);
-    }
-  }
+  await privateResponse(message, `${content}\n\n${preservedText}`, { deleteCommand: false });
 }
 
 function parseRecurrence(input) {
@@ -1897,6 +1932,10 @@ function renderHostManageMenu(event, userId) {
 }
 
 async function startEventManagement(message, idInput, guildId = message.guildId) {
+  if (message.guildId && !configForGuild(guildId).dmControlsEnabled) {
+    await privateResponse(message, t('dmControlsOptInRequired', {}, guildId));
+    return;
+  }
   const id = String(idInput ?? '').trim().replaceAll('`', '').toUpperCase();
   if (!id) {
     await privateResponse(message, t('hostManageUsage', {}, message.guildId));
