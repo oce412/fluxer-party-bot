@@ -8,6 +8,9 @@ ENV BUILD_REVISION=${BUILD_REVISION} \
     PORT=3000 \
     DATA_DIR=data-production
 
+LABEL org.opencontainers.image.source="https://github.com/oce412/fluxer-party-bot" \
+      org.opencontainers.image.revision="${BUILD_REVISION}"
+
 WORKDIR /app
 
 # Exact dependency tree from package-lock.json; installs runtime dependencies only.
