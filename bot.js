@@ -16,6 +16,7 @@ import {
   addEvents,
   allEvents,
   closeStore,
+  deleteGuildData,
   getGuildSettings,
   getUserTimeZone,
   initStore,
@@ -252,6 +253,43 @@ client.on(Events.Resumed, () => {
     pingMs: client.ws?.ping ?? null,
     appEnv: APP_ENV,
   });
+});
+
+// Fluxer.js emits GuildUnavailable separately for temporary outages;
+// GuildDelete is reserved for permanent removal of the bot from a community.
+client.on(Events.GuildDelete, async (guild) => {
+  const guildId = String(guild?.id ?? '').trim();
+  if (!guildId) {
+    log.warn('Received GuildDelete without a guild ID; community data was not modified');
+    return;
+  }
+
+  try {
+    const result = await deleteGuildData(guildId);
+
+    for (const [userId, context] of dmGuildContexts) {
+      if (String(context?.guildId ?? '') === guildId) dmGuildContexts.delete(userId);
+    }
+    for (const [userId, session] of eventCreateSessions) {
+      if (String(session?.guildId ?? '') === guildId) eventCreateSessions.delete(userId);
+    }
+    for (const [userId, session] of hostManageSessions) {
+      if (String(session?.guildId ?? '') === guildId) hostManageSessions.delete(userId);
+    }
+    for (const [userId, session] of setupSessions) {
+      if (String(session?.guildId ?? '') === guildId) setupSessions.delete(userId);
+    }
+    for (const [userId, session] of dmGuildSelectionSessions) {
+      if (Array.isArray(session?.guilds)) {
+        session.guilds = session.guilds.filter((item) => String(item?.id ?? '') !== guildId);
+        if (!session.guilds.length) dmGuildSelectionSessions.delete(userId);
+      }
+    }
+
+    log.info('Community data removed after bot removal', result);
+  } catch (error) {
+    log.error('Could not delete community data after bot removal', { guildId, error });
+  }
 });
 
 client.on(Events.MessageCreate, async (message) => {
