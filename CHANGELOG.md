@@ -21,10 +21,13 @@
 ## v0.9.1-beta.1 — Presentation and localization
 
 - Replace event announcement text cards with localized rich embeds that refresh in place when RSVPs or event status change.
+- Refine announcement embeds with an inline start-time hierarchy, compact attendance/duration stats, and less repeated RSVP metadata.
+- Group event-detail metadata and attendee names into a more compact layout; simplify upcoming-event rows for faster scanning.
 - Use rich embeds for private event lists and event details in DMs.
 - Append opt-in contributor credits from locale metadata to language-change confirmations, without requiring translated contributor names.
 - Include Fluxer's `EMBED_LINKS` permission in generated minimum and recommended bot invite URLs; keep a text-card fallback for existing installations without that permission.
 - Document the minimum permission set and the optional `MANAGE_MESSAGES` permission without requesting Administrator.
+- Report the local Git commit from `/healthz` automatically, mark uncommitted local changes with `-dirty`, and embed the Docker build revision in the image environment and OCI label.
 
 ## v0.9.0 — DM event workflow (in development)
 
