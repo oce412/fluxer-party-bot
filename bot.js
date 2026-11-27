@@ -842,7 +842,9 @@ async function setupCommand(message, rawArguments) {
       return;
     }
     await updateGuildSettings(guildId, { dmControlsEnabled: enabled });
-    await privateResponse(message, t(enabled ? 'dmControlsEnabled' : 'dmControlsDisabled', {}, guildId));
+    // Confirm the preference change in the channel where the admin issued it,
+    // including the opt-in transition that would otherwise route this reply to DMs.
+    await safeReply(message, t(enabled ? 'dmControlsEnabled' : 'dmControlsDisabled', {}, guildId));
     return;
   }
   if (action === 'channel') {
