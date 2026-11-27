@@ -30,9 +30,11 @@ The bot does not use this information for advertising or sell it to advertisers.
 
 ## 4. Commands, private messages and notifications
 
-By default, commands sent in a community are answered in that community's channel.
+By default, routine commands sent in a community are answered in that community's channel.
 
-A community administrator can optionally enable **private DM controls** in the setup wizard or with `!event setup dm on`. When enabled, members can use private messages for supported event commands and guided event creation or management. The setting can be disabled again with `!event setup dm off`.
+The guided administrator setup is an explicit exception: when an administrator runs `!event setup`, the bot opens a private setup wizard because it needs several prompts and asks there whether private DM controls should be enabled. Administrators who prefer channel-only setup can use the one-setting commands, including `!event setup dm on` and `!event setup dm off`; these reply in the channel.
+
+Private DM controls are **disabled by default**. When an administrator enables them in the setup wizard or with `!event setup dm on`, members can use supported event commands and guided event creation or management in private messages. The setting can be disabled again with `!event setup dm off`. Users who message the bot directly still receive replies in that DM, subject to the community's private-controls setting for community-specific commands.
 
 The bot may also send event-related private messages to hosts and members who have RSVP'd, for reminders, event-start notices, or relevant host/event updates. These messages are tied to the event and the bot's configured notification features. If a private message cannot be delivered, the bot may post a fallback notice in the event's configured channel and identify only the intended recipients.
 
