@@ -70,7 +70,7 @@ For the current code changes, the accurate FluxerList selection is **Some AI use
 ## Required before submission
 
 - [ ] Confirm the public bot name and Fluxer application/bot ID.
-- [ ] Publish the privacy policy at a stable public HTTPS URL. Confirm the operator/controller details and applicable legal basis before publication.
+- [ ] Publish the privacy policy at a stable public HTTPS URL. Confirm the controller's full identity, applicable legal basis for each purpose, the relevant supervisory authority, and any additional rights/notice requirements before publication.
 - [ ] Verify the privacy-request email and provide a support/community URL.
 - [ ] Verify that removal cleanup works in the live Fluxer environment, and separately confirm any FluxerHost backup/log retention details you wish to state.
 - [ ] Verify the production invite URL and permissions using `npm run invite`.
