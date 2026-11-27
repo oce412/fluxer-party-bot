@@ -1,10 +1,10 @@
 # FluxerList listing draft
 
-**Status: do not submit until the privacy-policy and operator fields below are completed.**
+**Status:** Draft — submit after the live behavior and privacy details have been verified.
 
 ## Suggested listing copy
 
-**Display name:** Confirm the final public name. The repository is named “Fluxer Party Events Bot”; the current privacy-policy draft calls the bot “Juke”. Use one name consistently.
+**Display name:** Juke (Fluxer Party Bot)
 
 **Short description (under 160 characters):**
 
@@ -12,7 +12,7 @@
 
 **Long description:**
 
-> Plan community events without leaving Fluxer. Create one-off or recurring events, collect yes/maybe/no RSVPs, show attendee capacity, and let hosts reschedule, update details, finish, or cancel events. Members can manage their event time zone, and hosts can send optional start notifications. Commands work in server channels and private messages, with a guided creation wizard and English/Russian interface. Event announcements use rich embeds when the bot has Embed Links permission, with a plain-text fallback for existing installations.
+> Plan community events without leaving Fluxer. Create one-off or recurring events, collect yes/maybe/no RSVPs, show attendee capacity, and let hosts reschedule, update details, finish, or cancel events. Commands and replies stay in server channels by default. Community administrators can optionally enable private DM controls for event commands and guided creation/management. The bot includes English and Russian interfaces and sends event-related reminders and notifications.
 
 ## Suggested tags
 
@@ -25,19 +25,20 @@ Check the current FluxerList tag vocabulary before submitting.
 The bot uses the `!` prefix:
 
 - `!event help` — server help
-- `!event create` — guided event creation
-- `!event create | ...` — advanced pipe-delimited creation
+- `!event create` — guided event creation (requires private DM controls to be enabled)
+- `!event create | ...` — create an event with the advanced one-line syntax
 - `!event list` — upcoming events
 - `!event info ID` — event details and attendees
-- `!event rsvp ID yes|maybe|no` — RSVP
+- `!event rsvp ID yes|maybe|no` — change RSVP
 - `!event cancel ID` — cancel your own event
-- `!event manage ID` — host controls
+- `!event manage ID` — host controls (requires private DM controls to be enabled)
 - `!event setup` — guided server setup (administrators)
+- `!event setup dm on|off` — enable or disable private DM controls
 - `!event myzone Europe/Amsterdam` — personal display time zone
 - `!event zones` — time-zone examples
 - `!event language` — language support and credits
 
-In DMs, use `!event server` to choose or switch communities. The current community is remembered for 10 minutes after the latest event command.
+Private commands require the community administrator to enable private DM controls. When enabled, use `!event server` in DMs to select or switch the community. The selection is remembered for 10 minutes after the latest event command.
 
 ## Invite permissions
 
@@ -49,19 +50,18 @@ Generate the OAuth2 invite from the configured application ID with `npm run invi
 
 See [Invite permissions](INVITE_PERMISSIONS.md). Existing installations must be re-authorized or have Embed Links granted to the bot role to show rich announcement embeds.
 
-## Data and privacy disclosure for the listing
+## Data and privacy disclosure
 
-This is an implementation summary, not a substitute for the final privacy policy.
+This is a summary for the listing, not a substitute for the full [privacy policy](PRIVACY_POLICY_DRAFT.md).
 
-- Fluxer delivers message events to the bot. The bot inspects supported `!event` command messages and wizard replies in memory; arbitrary conversation messages are not stored by the application.
-- When a member uses DM commands or switches communities, the bot checks that member's membership in communities where it is installed to find valid choices. It does not enumerate, archive, or export full community member lists.
-- Stored records include server IDs and settings; event titles, descriptions, dates, time zones, duration, recurrence, host IDs/display names, channel/message IDs and status; RSVP user IDs, usernames/display names and RSVP status; reminder/notification delivery state; and member time-zone preferences.
-- Operational logs are structured JSON and may contain event/server/channel IDs, error messages, counts and service health. Token-like strings, secret fields, and common database connection strings are redacted. The logger does not intentionally log arbitrary message content or attendee lists.
-- The bot sends event-related DMs to hosts and members who RSVP yes/maybe for reminders or explicitly enabled start notifications. If delivery fails, it can post a fallback notice in the event channel and mention only the intended recipients. It does not send promotional broadcasts.
-- The bot application and its PostgreSQL database are hosted through FluxerHost. PostgreSQL runs in a persistent container. FluxerHost describes its infrastructure as Kubernetes-based and advertises an EU infrastructure option, but the physical region of this project's cluster and persistent storage has not been confirmed. Do not claim EU/EEA or any other specific data residency until FluxerHost confirms it.
-- Application event/settings records are retained indefinitely until the operator manually deletes them. The app does not automatically purge records when the bot leaves a community. Backup and platform-log retention are controlled by the hosting arrangement and must be confirmed with FluxerHost; do not invent a number.
-- `LANGUAGE_REQUEST_FORM_URL` and `LANGUAGE_SUBMISSION_FORM_URL` may be configured. When used, those external form providers and the data sent to them must be disclosed.
-- The application has no automatic event-retention or server-removal deletion job. Event records remain in storage until the operator deletes them through database maintenance. Set and publish an actual retention/deletion procedure before launch.
+- Fluxer delivers message events to the bot. Supported command messages and wizard replies are processed in memory; the application does not intentionally store general conversation history or arbitrary chat messages.
+- Stored records include community IDs and settings (language, time zone, announcement channel, duration and DM-controls preference); event titles/descriptions, date/time, time zone, duration, recurrence, host IDs/display names, channel/message IDs and status; RSVP user IDs, usernames/display names and RSVP status; personal time-zone preferences; and notification delivery records.
+- Operational logs may contain community, channel and event identifiers, error messages, counts and service health. The logger redacts common secret fields, token-like strings and database credentials.
+- Commands in server channels are answered in the channel by default. DMs for event commands and guided creation/management are enabled only when a community administrator opts in. Event reminders and related notifications may be sent to hosts and members who RSVP or are included in an enabled event notification.
+- The bot application and PostgreSQL persistent container are hosted through FluxerHost's **EU infrastructure**. FluxerHost describes its Kubernetes-based hosting and its staff-access conditions in its [hosting overview](https://fluxer.host/about) and [privacy policy](https://fluxer.host/privacy).
+- While the bot remains installed, event and community records have no automatic age-based expiry. When the bot receives the permanent community-removal event, it deletes that community's events, RSVPs, settings and saved time-zone preferences from the active database.
+- Members and community administrators can request access, correction or deletion by emailing **partybotfluxer@gmail.com**. FluxerHost-managed backups and hosting logs are separate from the bot's active database cleanup and follow the host's own retention practices.
+- Optional language-request or translation forms may use Google Forms. They are not currently publicly enabled; disclose the form and data collected if they are enabled later.
 
 ## AI and voice disclosure
 
@@ -70,12 +70,11 @@ For the current code changes, the accurate FluxerList selection is **Some AI use
 ## Required before submission
 
 - [ ] Confirm the public bot name and Fluxer application/bot ID.
-- [ ] Publish a final privacy policy at a stable public HTTPS URL. Replace every placeholder in `PRIVACY_POLICY_DRAFT.md`, including operator identity, privacy contact, database and app hosting providers/regions, configured form providers, retention for primary data/backups/logs, deletion process, and applicable legal basis/transfer details.
-- [ ] Provide a working privacy-request contact and a support/community URL.
-- [ ] Decide and document data retention and a deletion process, including what happens after the bot is removed from a community.
+- [ ] Publish the privacy policy at a stable public HTTPS URL. Confirm the operator/controller details and applicable legal basis before publication.
+- [ ] Verify the privacy-request email and provide a support/community URL.
+- [ ] Verify that removal cleanup works in the live Fluxer environment, and separately confirm any FluxerHost backup/log retention details you wish to state.
 - [ ] Verify the production invite URL and permissions using `npm run invite`.
-- [ ] Verify the production bot responds promptly, has no unsolicited join messages, and only sends event-triggered notifications described above.
-- [ ] Test first install, Embed Links granted, Embed Links absent, RSVP updates, cancellation/status updates, DMs, English and Russian, and database restore.
+- [ ] Test default channel replies, DM controls disabled/enabled, first install, Embed Links granted/absent, RSVP updates, cancellation/status updates, DMs, English and Russian, and database restore.
 - [ ] Review the final listing against the current [FluxerList bot submission guide](https://docs.fluxerlist.com/bots) and [bot guidelines](https://docs.fluxerlist.com/bot-guidelines).
 
-Do not publish this draft as the live privacy policy. It intentionally records the remaining operator decisions rather than guessing them.
+Do not submit this draft until the remaining checks are complete.
