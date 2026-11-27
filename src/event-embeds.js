@@ -24,12 +24,26 @@ function attendeesOf(event) {
     : [];
 }
 
-function attendanceSummary(event, attendees, noLimitLabel, maybeLabel) {
-  const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
-  const maybeCount = attendees.filter((attendee) => attendee.status === 'maybe').length;
+function attendanceCounts(attendees) {
+  return {
+    yes: attendees.filter((attendee) => attendee.status === 'yes').length,
+    maybe: attendees.filter((attendee) => attendee.status === 'maybe').length,
+  };
+}
+
+function attendanceCapacity(event, yesCount, noLimitLabel) {
   const max = Number(event?.maxAttendees);
-  const capacity = Number.isInteger(max) && max > 0 ? `${yesCount}/${max}` : `${yesCount} · ${noLimitLabel}`;
-  return maybeCount ? `${capacity} · ${maybeLabel}: ${maybeCount}` : capacity;
+  return Number.isInteger(max) && max > 0
+    ? `${yesCount}/${max}`
+    : `${yesCount} · ${noLimitLabel}`;
+}
+
+function announcementAttendance(event, attendees, noLimitLabel, maybeLabel) {
+  const counts = attendanceCounts(attendees);
+  const capacity = attendanceCapacity(event, counts.yes, noLimitLabel);
+  return counts.maybe
+    ? `**${capacity}**\n🤔 ${text(maybeLabel, 'Maybe', 80)}: ${counts.maybe}`
+    : `**${capacity}**`;
 }
 
 function attendeeNames(attendees, status) {
@@ -43,14 +57,17 @@ function statusColor(status) {
   return EVENT_COLORS[status] ?? EVENT_COLORS.scheduled;
 }
 
-function emphasized(value, fallback = '—') {
-  return `**${text(value, fallback, 1020)}**`;
+function statusAuthor(event, hostLabel) {
+  const creatorName = String(event?.creatorName ?? '').trim();
+  return creatorName
+    ? { name: `${text(hostLabel, 'Host', 80)} · ${text(creatorName, 'Unknown', 160)}` }
+    : undefined;
 }
 
 /**
- * Fluxer enforces a 6,000-character aggregate embed budget in addition to
- * per-property limits. Keep a predictable budget for the header and footer,
- * then clip field payloads rather than failing the entire send.
+ * Fluxer enforces a 6,000-character aggregate embed budget as well as
+ * per-property limits. Clip each section before adding it so the complete
+ * payload remains valid even when event descriptions or attendee lists are long.
  */
 function fitEmbed(payload) {
   const title = text(payload.title, 'Event', 256);
@@ -62,11 +79,12 @@ function fitEmbed(payload) {
   const fields = [];
 
   for (const field of (Array.isArray(payload.fields) ? payload.fields : []).slice(0, 25)) {
-    if (remaining < 2) break;
-    const name = text(field?.name, 'Details', Math.min(256, remaining - 1));
+    if (remaining < 3) break;
+    const name = text(field?.name, 'Details', Math.min(256, remaining - 2));
+    if (!name) break;
     remaining -= name.length;
-    if (remaining < 1) break;
-    const value = text(field?.value, '—', Math.min(1024, remaining));
+    const value = text(field?.value, '—', Math.min(1024, remaining - 1));
+    if (!value) break;
     remaining -= value.length;
     fields.push({ name, value, inline: Boolean(field?.inline) });
   }
@@ -81,34 +99,54 @@ function fitEmbed(payload) {
   };
 }
 
+function scheduleLine(when, whenLabel) {
+  const label = text(whenLabel, 'Starts', 80).replace(/^📅\s*/, '');
+  const formattedWhen = text(when).replace(/^📅\s*/, '');
+  return `📅 **${label}** · ${formattedWhen}`;
+}
+
+function compactEventDescription(event, when, whenLabel) {
+  const parts = [];
+  const description = String(event?.description ?? '').trim();
+  if (description) parts.push(description);
+  if (when) parts.push(scheduleLine(when, whenLabel));
+  return parts.join('\n\n');
+}
+
 export function buildEventAnnouncementEmbed(event, {
   when,
   duration,
   noLimitLabel = 'no limit',
   maybeLabel = 'Maybe',
-  whenLabel = 'When',
-  attendeesLabel = 'Attending',
-  durationLabel = 'Duration',
+  whenLabel = 'Starts',
+  attendeesLabel = '👥 Attending',
+  durationLabel = '⏳ Duration',
   statusLabel = '',
   hostLabel = 'Host',
   footer = '',
 } = {}) {
   const attendees = attendeesOf(event);
+  const counts = attendanceCounts(attendees);
   const statusSuffix = event?.status && event.status !== 'scheduled' && statusLabel ? ` · ${statusLabel}` : '';
-  const description = String(event?.description ?? '').trim();
+
+  // Keep the date in the reading flow instead of giving it a separate,
+  // full-width field. Two compact fields below carry the scan-friendly stats.
+  const description = compactEventDescription(event, when ?? event?.startsAt, whenLabel);
   const fields = [
-    { name: text(whenLabel, '📅 When', 256), value: emphasized(when ?? event?.startsAt), inline: false },
-    { name: text(attendeesLabel, '👥 Attending', 256), value: emphasized(attendanceSummary(event, attendees, noLimitLabel, maybeLabel)), inline: true },
-    { name: text(durationLabel, '⏱️ Duration', 256), value: emphasized(duration), inline: true },
+    {
+      name: text(attendeesLabel, '👥 Attending', 256),
+      value: announcementAttendance(event, attendees, noLimitLabel, maybeLabel),
+      inline: true,
+    },
+    {
+      name: text(durationLabel, '⏳ Duration', 256),
+      value: `**${text(duration, '—', 100)}**`,
+      inline: true,
+    },
   ];
 
-  const creatorName = String(event?.creatorName ?? '').trim();
-  const authorName = creatorName
-    ? `${text(hostLabel, 'Host', 80)} · ${text(creatorName, 'Unknown', 160)}`
-    : '';
-
   return fitEmbed({
-    ...(authorName ? { author: { name: authorName } } : {}),
+    author: statusAuthor(event, hostLabel),
     title: text(`🎉 ${event?.title ?? 'Untitled event'}${statusSuffix}`, '🎉 Event', 256),
     ...(description ? { description } : {}),
     color: statusColor(event?.status),
@@ -130,33 +168,53 @@ export function buildEventDetailsEmbed(event, {
   footer = '',
 } = {}) {
   const attendees = attendeesOf(event);
+  const counts = attendanceCounts(attendees);
+  const capacity = attendanceCapacity(event, counts.yes, noLimitLabel);
   const metadata = [
     `🏠 **${text(labels.community, 'Community', 80)}:** ${text(communityName)}`,
     `📣 **${text(labels.announcements, 'Announcements', 80)}:** ${text(channelMention)}`,
   ].join('  ·  ');
   const description = [
     String(event?.description ?? '').trim(),
+    when ? scheduleLine(when, labels.when ?? 'Starts') : '',
     metadata,
   ].filter(Boolean).join('\n\n');
-  const fields = [
-    { name: text(labels.when, '📅 When', 256), value: text(when ?? event?.startsAt), inline: false },
-    { name: text(labels.host, '👤 Host', 256), value: text(event?.creatorName, 'Unknown'), inline: true },
-    { name: text(labels.attendees, '👥 Attending', 256), value: attendanceSummary(event, attendees, noLimitLabel, maybeLabel), inline: true },
-    { name: text(labels.duration, '⏱️ Duration', 256), value: text(duration), inline: true },
-  ];
+
+  const fields = [];
   if (labels.status && labels.statusValue) {
-    fields.splice(1, 0, {
-      name: text(labels.status, '◈ Status', 256),
+    fields.push({
+      name: text(labels.status, 'Status', 256),
       value: text(labels.statusValue),
       inline: true,
     });
   }
   fields.push(
-    { name: text(labels.attendingNames, '✅ Attending members', 256), value: attendeeNames(attendees, 'yes'), inline: true },
-    { name: text(labels.maybeNames, '🤔 Maybe members', 256), value: attendeeNames(attendees, 'maybe'), inline: true },
+    {
+      name: text(labels.attendees, '👥 Attending', 256),
+      value: counts.maybe
+        ? `**${capacity}**\n🤔 ${text(maybeLabel, 'Maybe', 80)}: ${counts.maybe}`
+        : `**${capacity}**`,
+      inline: true,
+    },
+    {
+      name: text(labels.duration, '⏳ Duration', 256),
+      value: `**${text(duration, '—', 100)}**`,
+      inline: true,
+    },
+    {
+      name: text(labels.attendingNames, '✅ Attending members', 256),
+      value: attendeeNames(attendees, 'yes'),
+      inline: true,
+    },
+    {
+      name: text(labels.maybeNames, '🤔 Maybe members', 256),
+      value: attendeeNames(attendees, 'maybe'),
+      inline: true,
+    },
   );
 
   return fitEmbed({
+    author: statusAuthor(event, labels.host ?? 'Host'),
     title: text(`🎉 ${event?.title ?? 'Untitled event'}`, '🎉 Event', 256),
     ...(description ? { description } : {}),
     color: statusColor(event?.status),
@@ -179,30 +237,32 @@ export function buildUpcomingEventsEmbed(events, {
   const safeEvents = Array.isArray(events) ? events.slice(0, 20) : [];
   const fields = safeEvents.map((event, index) => {
     const attendees = attendeesOf(event);
+    const counts = attendanceCounts(attendees);
     let when = event?.startsAt;
     try {
       if (typeof formatWhen === 'function') when = formatWhen(event);
     } catch {
       // Keep the stored ISO timestamp if personal-time formatting is unavailable.
     }
-    const yesCount = attendees.filter((attendee) => attendee.status === 'yes').length;
-    const maybeCount = attendees.filter((attendee) => attendee.status === 'maybe').length;
-    const max = Number(event?.maxAttendees);
-    const capacity = Number.isInteger(max) && max > 0 ? `${yesCount}/${max}` : `${yesCount} · ${noLimitLabel}`;
-    const attendance = maybeCount ? `👥 ${capacity}  ·  🤔 ${maybeLabel}: ${maybeCount}` : `👥 ${capacity}`;
+    const capacity = attendanceCapacity(event, counts.yes, noLimitLabel);
+    const attendance = counts.maybe
+      ? `👥 ${capacity} · 🤔 ${text(maybeLabel, 'Maybe', 80)}: ${counts.maybe}`
+      : `👥 ${capacity}`;
+    const eventId = text(event?.id, 'unknown', 64);
+
     return {
-      name: `${String(index + 1).padStart(2, '0')}  ·  🎉 ${text(event?.title, 'Untitled event', 190)}  ·  ${text(event?.id, 'unknown', 64)}`,
-      value: `📅 ${text(when)}     ${attendance}`,
+      name: `${String(index + 1).padStart(2, '0')} · ${text(event?.title, 'Untitled event', 170)}`,
+      value: `📅 ${text(when)}\n${attendance} · ID: \`${eventId}\``,
       inline: false,
     };
   });
 
   return fitEmbed({
+    ...(communityName ? { author: { name: text(communityName, 'Community', 256) } } : {}),
     title: `🗓️ ${text(labels.title, 'Upcoming events', 248)}`,
-    description: [
-      `🏠 **${text(labels.community, 'Community', 80)}:** ${text(communityName)}`,
-      `📣 **${text(labels.announcements, 'Announcements', 80)}:** ${text(channelMention)}`,
-    ].join('  ·  '),
+    description: channelMention
+      ? `📣 **${text(labels.announcements, 'Announcements', 80)}:** ${text(channelMention)}`
+      : '',
     color: EVENT_COLORS.scheduled,
     fields,
     footer: {
