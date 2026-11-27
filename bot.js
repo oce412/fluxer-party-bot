@@ -447,12 +447,11 @@ client.on(Events.MessageReactionAdd, async ({ message, reaction, emoji, userId, 
 
     const result = changeRsvp(event, userId, user?.username ?? `User-${userId.slice(-4)}`, status);
     if (!result.ok) {
-      const sentPrivately = user?.send ? await user.send(result.reason).then(() => true).catch(() => false) : false;
-      if (!sentPrivately) {
-        const eventMessage = message ?? (reaction ? await reaction.fetchMessage() : null);
-        if (eventMessage) {
-          await eventMessage.reply({ content: result.reason, allowedMentions: { parse: [], repliedUser: false } });
-        }
+      // RSVP validation feedback belongs under the event post; reacting is not
+      // consent to receive a separate direct message.
+      const eventMessage = message ?? (reaction ? await reaction.fetchMessage() : null);
+      if (eventMessage) {
+        await eventMessage.reply({ content: result.reason, allowedMentions: { parse: [], repliedUser: false } });
       }
       return;
     }
