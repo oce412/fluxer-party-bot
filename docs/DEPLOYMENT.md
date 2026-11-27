@@ -76,6 +76,7 @@ The Docker health check uses `/readyz`. Keep the health port reachable by your p
 - Schedule `npm run db:backup` from a trusted host with the required PostgreSQL tools and credentials.
 - Store backups encrypted, separately from the production database, with access restricted to operators who need restore capability.
 - Define the backup retention period in the hosting/backup system; the application does not enforce it.
+- When the bot receives a permanent Fluxer community-removal event, it deletes that community's events, RSVPs, settings and member time-zone preferences from the active database. This does not erase host-managed backup snapshots or platform logs; their retention is controlled by FluxerHost.
 - Regularly test restoring a backup into a separate database. A backup that has not been restored in a test is not a verified recovery plan.
 - Database migrations are additive and transactional; take a verified backup before deploying a release that changes schema.
 - Keep the prior immutable application image available so the application process can be rolled back. If a migration has already run, confirm backward compatibility before rolling back the application; restore the database only using a documented recovery decision.
@@ -89,9 +90,10 @@ After deployment:
 3. Confirm the bot logs in as the expected bot identity and `/readyz` returns HTTP 200.
 4. In a test community, run `!event setup`, create an event, RSVP yes/maybe/no, and use host controls to edit and cancel it.
 5. Repeat with a bot role that has Embed Links and with a test role that does not; verify rich embed and text fallback respectively.
-6. Verify DMs, community switching, English/Russian locale, and time-zone rendering.
-7. Confirm scheduled reminders/notifications are event-triggered and only sent to the host and relevant attendees.
-8. Verify PostgreSQL backup and restore from the deployed release.
+6. Verify that server commands reply in-channel with DM controls disabled by default; enable them with `!event setup dm on`, confirm DM commands and guided creation/management work, then disable them with `!event setup dm off` and confirm replies return to the server channel.
+7. Verify DMs, community switching, English/Russian locale, and time-zone rendering.
+8. Confirm scheduled reminders/notifications are event-triggered and only sent to the host and relevant attendees.
+9. Verify PostgreSQL backup and restore from the deployed release.
 
 ## Public launch gate
 
